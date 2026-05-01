@@ -17,7 +17,10 @@ sats = walker.generate()
 propagator = Propagator(sats)
 
 current_time = Time.now()
-network = SatelliteNetwork(sats, MAX_LINK_DISTANCE, P, math.floor(T / P), F, current_time, only_europe=True)
+
+only_europe = True
+
+network = SatelliteNetwork(sats, MAX_LINK_DISTANCE, P, math.floor(T / P), F, current_time, only_europe)
 
 t = 0.0
 t_end = SIM_DURATION.to_value(u.s)
@@ -44,4 +47,5 @@ print(graph_list[0])
 print("Simulation complete. Generating visualization...")
 # --- plotting ---
 plot_constellation_timeline(graph_list, time_list, title="Full Constellation Over Time")
-plot_constellation_timeline(euro_graph_list, time_list, title="European Subgraph Over Time")
+if only_europe:
+    plot_constellation_timeline(euro_graph_list, time_list, title="European Subgraph Over Time")

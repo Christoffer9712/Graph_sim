@@ -11,6 +11,8 @@ from utils.coordinates import eci_to_latlon, eci_to_latlon_batch
 # All stored values are plain floats: distances in km, times in minutes.
 # ──────────────────────────────────────────────────────────────
 
+ALWAYS_UP = True  # If True, links never go DOWN (for testing visualization without stochasticity)
+
 class LinkType(Enum):
     INTRA_PLANE_ISL = "intra_plane_isl"
     INTER_PLANE_ISL = "inter_plane_isl"
@@ -32,11 +34,11 @@ class LinkParams:
 # Dimensions are s and km
 LINK_PARAMS: dict[LinkType, LinkParams] = {
     LinkType.INTRA_PLANE_ISL: LinkParams(
-        mttf_ref=10000, d_ref=2400, mttr=500,  gamma_fail=0.5,
+        mttf_ref=100000, d_ref=2400, mttr=500,  gamma_fail=0.5,
         per_ref=1e-5,    gamma_per=2.0, alpha_load=0.5, cv=0.1,
     ),
     LinkType.INTER_PLANE_ISL: LinkParams(
-        mttf_ref=30000,  d_ref=1000, mttr=1000, gamma_fail=1.0,
+        mttf_ref=300000,  d_ref=1000, mttr=1000, gamma_fail=1.0,
         per_ref=1e-4,    gamma_per=2.0, alpha_load=0.5, cv=0.2,
     ),
 }
@@ -212,7 +214,10 @@ class SatelliteNetwork:
 
             data['distance'] = dist
             params           = LINK_PARAMS[data['link_type']]
-            data['state']    = _markov_step(data['state'], params, dist, dt)   # 'UP' or 'DOWN'
+            if ALWAYS_UP:
+                data['state'] = 'UP'
+            else:
+                data['state']    = _markov_step(data['state'], params, dist, dt)   # 'UP' or 'DOWN'
             data['per']      = _sample_per(params, dist)
 
         self.graph.remove_edges_from(to_remove)
@@ -237,13 +242,21 @@ class SatelliteNetwork:
     def _topology_neighbors(self, sat) -> list[tuple]:
         p, s = sat.plane, sat.index
 
-        return [
-            (self._plane_to_sat[(p, (s + 1) % self.S)],
-             LinkType.INTRA_PLANE_ISL),
+        intra_neighbor = self._plane_to_sat[(p, (s + 1) % self.S)]
 
-            (self._plane_to_sat[((p + 1) % self.P,
-                                 (s + int((p + 1) % self.P == 0)) % self.S)],
-             LinkType.INTER_PLANE_ISL),
+        next_plane = (p + 1) % self.P
+        inter_neighbors = [
+            self._plane_to_sat[(next_plane, t)]
+            for t in range(self.S)
+        ]
+        inter_neighbor = min(
+            inter_neighbors,
+            key=lambda neighbor: self._dist_km(sat, neighbor)
+        )
+
+        return [
+            (intra_neighbor, LinkType.INTRA_PLANE_ISL),
+            (inter_neighbor, LinkType.INTER_PLANE_ISL),
         ]
 
     def _add_edge(self, u: str, v: str, distance_km,
