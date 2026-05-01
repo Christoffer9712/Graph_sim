@@ -8,6 +8,6 @@ INC = 53 * u.deg    # inclination
 ALTITUDE = 550 * u.km
 
 TIME_STEP = 30 * u.s
-SIM_DURATION = 200 * u.s
+SIM_DURATION = 1000 * u.s
 
 MAX_LINK_DISTANCE = 20000 * u.km

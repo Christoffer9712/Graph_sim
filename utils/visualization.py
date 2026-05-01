@@ -1,7 +1,9 @@
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
-from utils.coordinates import eci_to_latlon
+import numpy as np
+from astropy import units as unit
+from utils.coordinates import eci_to_latlon, eci_to_latlon_batch
 
 
 def _edge_trace(graph, node_coords):
@@ -29,7 +31,7 @@ def _edge_trace(graph, node_coords):
     )
 
 
-def plot_constellation_timeline(graph_list, time_list):
+def plot_constellation_timeline(graph_list, time_list, title="Satellite Constellation Over Time"):
     rows = []
 
     # coord_cache[t_idx][node] = (lat, lon)
@@ -38,12 +40,13 @@ def plot_constellation_timeline(graph_list, time_list):
 
     for t_idx, (graph, current_time) in enumerate(zip(graph_list, time_list)):
         coord_cache[t_idx] = {}
-        for node in graph.nodes:
-            lat, lon = eci_to_latlon(graph.nodes[node]['position'], current_time)
-            lat, lon = lat.item(), lon.item()
-            coord_cache[t_idx][node] = (lat, lon)
+
+        positions = np.stack([graph.nodes[node]['position'] for node in graph.nodes])
+        latitudes, longitudes = eci_to_latlon_batch(positions, current_time)
+        for idx, node in enumerate(graph.nodes):
+            coord_cache[t_idx][node] = (latitudes[idx], longitudes[idx])
             rows.append({"time": t_idx, "sat": node,
-                         "latitude": lat, "longitude": lon})
+                         "latitude": latitudes[idx], "longitude": longitudes[idx]})
 
     dataframe = pd.DataFrame(rows)
 
@@ -65,5 +68,5 @@ def plot_constellation_timeline(graph_list, time_list):
     # Populate the edge slot for the initial static view (before play is pressed).
     #fig.data[-1] = _edge_trace(graph_list[0], coord_cache[0])
 
-    fig.update_layout(title="Satellite Constellation Over Time", title_x=0.5)
+    fig.update_layout(title=title, title_x=0.5)
     fig.show()
