@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 import astropy.units as unit
 from astropy.time import TimeDelta
+from ground_network.topology import C_VACUUM
+from ground_network.topology import C_VACUUM
 from utils.coordinates import eci_to_latlon, eci_to_latlon_batch
 
 # ──────────────────────────────────────────────────────────────
@@ -219,6 +221,7 @@ class SatelliteNetwork:
             else:
                 data['state']    = _markov_step(data['state'], params, dist, dt)   # 'UP' or 'DOWN'
             data['per']      = _sample_per(params, dist)
+            data['latency']  = dist / (C_VACUUM / 1000)
 
         self.graph.remove_edges_from(to_remove)
 
@@ -264,16 +267,18 @@ class SatelliteNetwork:
         params = LINK_PARAMS[link_type]
         self.graph.add_edge(u, v,
             link_type = link_type,
-            distance  = distance_km,   # plain float in km ✓
+            distance  = distance_km,
             state     = state,
             per       = _sample_per(params, distance_km),
+            latency   = distance_km / (C_VACUUM / 1000),  # seconds
         )
         if self.only_europe and u in self._euro_nodes and v in self._euro_nodes:
             self.euro_graph.add_edge(u, v,
                 link_type = link_type,
-                distance  = distance_km,   # plain float in km ✓
+                distance  = distance_km,
                 state     = state,
                 per       = _sample_per(params, distance_km),
+                latency   = distance_km / (C_VACUUM / 1000),  # seconds
             )
 
     @staticmethod

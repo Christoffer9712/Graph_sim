@@ -81,12 +81,6 @@ def _full_graph_edge_traces(graph, node_coords):
         'satellite_gateway_links': {
             'lat': [], 'lon': [], 'color': 'orange', 'name': 'satellite-gateway',
         },
-        'aviation_links': {
-            'lat': [], 'lon': [], 'color': 'green', 'name': 'aviation-aviation',
-        },
-        'aviation_gateway_links': {
-            'lat': [], 'lon': [], 'color': 'purple', 'name': 'aviation-gateway',
-        },
         'ground_links': {
             'lat': [], 'lon': [], 'color': 'gray', 'name': 'ground-grid',
         },
@@ -110,12 +104,8 @@ def _full_graph_edge_traces(graph, node_coords):
         else:
             type_u = graph.nodes[u].get('node_type')
             type_v = graph.nodes[v].get('node_type')
-            if type_u == GroundNodeType.AVIATION and type_v == GroundNodeType.AVIATION:
-                category = 'aviation_links'
-            elif {type_u, type_v} == {GroundNodeType.AVIATION, GroundNodeType.GATEWAY}:
-                category = 'aviation_gateway_links'
-            else:
-                category = 'ground_links'
+
+            category = 'ground_links'
 
         lat_u, lon_u = node_coords[u]
         lat_v, lon_v = node_coords[v]
@@ -148,7 +138,8 @@ def plot_full_graph_timeline(full_graph_list, time_list, title="Full Graph Timel
 
     for t_idx, (graph, current_time) in enumerate(zip(full_graph_list, time_list)):
         coord_cache[t_idx] = {}
-        satellite_nodes = [n for n, d in graph.nodes(data=True) if 'position' in d]
+        aircraft_nodes = [n for n, d in graph.nodes(data=True) if d.get('node_type') == 'aircraft']
+        satellite_nodes = [n for n, d in graph.nodes(data=True) if 'position' in d and d.get('node_type') != 'aircraft']
         ground_nodes = [n for n, d in graph.nodes(data=True) if 'lat' in d and 'lon' in d]
 
         if satellite_nodes:
@@ -173,6 +164,17 @@ def plot_full_graph_timeline(full_graph_list, time_list, title="Full Graph Timel
                 "latitude": lat,
                 "longitude": lon,
                 "type": "ground",
+            })
+
+        for node in aircraft_nodes:
+            lat, lon = graph.nodes[node]['lat'], graph.nodes[node]['lon']
+            coord_cache[t_idx][node] = (lat, lon)
+            rows.append({
+                "time": t_idx,
+                "node": node,
+                "latitude": lat,
+                "longitude": lon,
+                "type": "aircraft",
             })
 
     dataframe = pd.DataFrame(rows)
