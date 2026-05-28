@@ -1,9 +1,10 @@
-from ground_network.utils import elevation_angle_deg, load_europe_land_shape
+from utils.utils import elevation_angle_deg, load_europe_land_shape
 from ground_network.gateways    import get_gateways
 from ground_network.upf        import get_upfs
 from ground_network.aviation     import generate_aviation_nodes
 from ground_network.network      import build_gateway_graph, build_aviation_graph, build_upf_graph  
-from ground_network.topology     import build_static_ground_graph, build_full_graph
+from ground_network.topology     import build_static_ground_graph
+from e2e_network.topology import build_full_graph
 
 angle = elevation_angle_deg(
     ground_lat = 52.0, ground_lon = 13.0,

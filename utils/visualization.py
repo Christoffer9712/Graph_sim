@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from astropy import units as unit
+from config import LinkType
 from ground_network.nodes import GroundNodeType
 from utils.coordinates import eci_to_latlon, eci_to_latlon_batch
 
@@ -78,7 +79,7 @@ def _full_graph_edge_traces(graph, node_coords):
         'satellite_links': {
             'lat': [], 'lon': [], 'color': 'royalblue', 'name': 'sat-sat',
         },
-        'satellite_gateway_links': {
+        'feeder_links': {
             'lat': [], 'lon': [], 'color': 'orange', 'name': 'satellite-gateway',
         },
         'ground_links': {
@@ -89,22 +90,14 @@ def _full_graph_edge_traces(graph, node_coords):
     for u, v, data in graph.edges(data=True):
         if u not in node_coords or v not in node_coords:
             continue
-        if 'position' in graph.nodes[u] and 'position' in graph.nodes[v]:
-            category = 'satellite_links'
-            if data.get('state') and data.get('state') != 'UP':
-                continue
-        elif 'position' in graph.nodes[u] or 'position' in graph.nodes[v]:
-            sat_node = u if 'position' in graph.nodes[u] else v
-            other = v if sat_node is u else u
-            other_type = graph.nodes[other].get('node_type')
-            if other_type == GroundNodeType.GATEWAY:
-                category = 'satellite_gateway_links'
-            else:
-                category = 'ground_links'
-        else:
-            type_u = graph.nodes[u].get('node_type')
-            type_v = graph.nodes[v].get('node_type')
+        if data.get('state') and data.get('state') != 'UP':
+            continue
 
+        if data['link_type'] == LinkType.INTRA_PLANE_ISL or data['link_type'] == LinkType.INTER_PLANE_ISL:
+            category = 'satellite_links'    
+        elif data['link_type'] == LinkType.FEEDER_LINK:
+            category = 'feeder_links'
+        else:
             category = 'ground_links'
 
         lat_u, lon_u = node_coords[u]

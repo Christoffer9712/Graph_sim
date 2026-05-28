@@ -2,7 +2,7 @@ import numpy as np
 import geopandas as gpd
 
 from .nodes import GroundNode, GroundNodeType
-from .utils import load_europe_land_shape
+from utils.utils import load_europe_land_shape
 
 
 def _grid_land_points(land_shape, spacing_deg: float) -> list[tuple[float, float]]:

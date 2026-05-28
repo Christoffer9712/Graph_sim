@@ -58,6 +58,19 @@ class Aircraft:
                 lon=lon,
             )
 
+    def fiveQI_to_per_latency(self, fiveQI: int) -> tuple[float, float]:
+        """
+        Placeholder mapping from 5G QoS class identifier to target PER and latency.
+        In a real implementation, this would be based on 3GPP specifications and
+        might also consider the specific application type, SLAs, etc.
+        """
+        if fiveQI == 1:   # URLLC control traffic
+            return 1e-5, 0.01  # Target PER of 10^-5 and latency of 10 ms
+        elif fiveQI == 5: # eMBB video traffic
+            return 1e-3, 0.1   # Target PER of 10^-3 and latency of 100 ms
+        else:
+            return 1e-4, 0.05  # Default targets for other traffic types
+
     # ── movement ──────────────────────────────────────────────────────────────
 
     def propagate(self, dt: float) -> None:
@@ -92,12 +105,16 @@ class Aircraft:
         #self.tunnels = ML.get_tunnels(
         #    self.trafficDemand, dt_tunnel, graph, self.node_id
         #)
-        for edge in graph.edges([self.node_id]):
-            print(f"Aircraft {self.node_id} has edge: {edge}")
-        
+        #for edge in graph.edges([self.node_id]):
+        #    print(f"Aircraft {self.node_id} has edge: {edge}")
+        #
         links = list(graph.neighbors(self.node_id))
 
         print(f"Aircraft {self.node_id} has links: {links}")
+
+        #sorted_traffic_demand = sorted(self.trafficDemand, key=lambda x: x.fiveQI)
+
+
         self.tunnels = [TunnelDescription(
             fiveQI=desc.fiveQI,
             BW=desc.BW,

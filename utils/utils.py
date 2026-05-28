@@ -3,7 +3,7 @@ from functools import lru_cache
 from astropy import units as u
 from shapely.geometry import box
 
-R_EARTH = 6_371.0  # earth radius in km
+R_EARTH_M = 6_371_000.0  # earth radius in meters
 
 EUROPE_BBOX = box(
     -25,   # west (Azores-ish)
@@ -12,11 +12,21 @@ EUROPE_BBOX = box(
     72     # north (Scandinavia)
 )
 
+def haversine_m(latlon_a, latlon_b) -> float:
+    """Great-circle distance in metres between two (lat, lon) pairs (degrees) using haversine formula."""
+    lat1, lon1 = np.radians(latlon_a)
+    lat2, lon2 = np.radians(latlon_b)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a    = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return float(2.0 * R_EARTH_M * np.arcsin(np.sqrt(a)))
+
+
 def latlon_to_ecef(lat_deg: float, lon_deg: float, alt_m: float = 0.0) -> np.ndarray:
     """Geodetic lat/lon/alt → ECEF XYZ (metres)."""
     lat = np.radians(lat_deg)
     lon = np.radians(lon_deg)
-    r   = R_EARTH + alt_m
+    r   = R_EARTH_M + alt_m
     return np.array([
         r * np.cos(lat) * np.cos(lon),
         r * np.cos(lat) * np.sin(lon),
@@ -26,7 +36,7 @@ def latlon_to_ecef(lat_deg: float, lon_deg: float, alt_m: float = 0.0) -> np.nda
 
 def eci_to_altitude(eci_position) -> float:
     """Altitude above Earth's surface (metres) from an ECI position vector."""
-    return float(np.linalg.norm(eci_position / u.km)) - R_EARTH
+    return float(np.linalg.norm(eci_position / u.m)) - R_EARTH_M
 
 
 def elevation_angle_deg(
