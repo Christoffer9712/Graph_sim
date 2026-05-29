@@ -1,10 +1,10 @@
 import numpy as np
 import networkx as nx
 
-from config import C_FIBER, C_VACUUM, LinkType
+from config import C_FIBER, C_VACUUM, LINK_PARAMS, LinkType
 from .types import TrafficDescription, TunnelDescription
 from .base_line_tunnel import tunnel_setup
-
+from utils.network_link_characteristics import sample_per
 
 # 1 degree of arc ≈ 111 km — used to convert speed (km/h) to deg/s.
 # Longitude degrees are shorter at high latitudes, but this approximation
@@ -36,7 +36,7 @@ _BW_CAPACITY_BY_LINK_TYPE: dict[LinkType, float] = {
 
 # ── Link-level metric models ─────────────────────────────────────────────────
  
-def _link_per(link_type: LinkType, total_load_bps: float) -> float:
+def _link_per(link_type: LinkType, total_load_bps: float, distance_m: float) -> float:
     """
     Return PER for a single link given its type and total aggregated load.
  
@@ -48,10 +48,16 @@ def _link_per(link_type: LinkType, total_load_bps: float) -> float:
     ----------
     link_type      : type of the link
     total_load_bps : sum of all flow bandwidths routed over this link (bps)
+    distance_m     : distance between the nodes (m)
     """
-    # TODO: replace with proper link-budget model (e.g. SINR → BLER curve)
-    base_per = 1e-4
-    return base_per
+    if link_type == LinkType.GROUND_GRID:
+        per = LINK_PARAMS[link_type].per_ref  # Assume fixed PER for ground links
+        utilization = 0.0
+    else:
+        utilization = total_load_bps / _BW_CAPACITY_BY_LINK_TYPE.get(link_type, 1e9)
+        per = sample_per(LINK_PARAMS[link_type], distance_m, utilization)
+    print(f"Computed PER={per:.2e} for link type {link_type} with distance {distance_m:.1f}m and load {total_load_bps:.1f}bps (utilization {utilization:.2%})")
+    return per
  
  
 def _link_queuing_delay(link_type: LinkType, capacity_bps: float, total_load_bps: float) -> float:
@@ -135,10 +141,10 @@ def compute_path_metrics(
         capacity_bps  = _BW_CAPACITY_BY_LINK_TYPE.get(link_type)
         prop_delay    = edge["distance"] / speed
         queuing_delay = _link_queuing_delay(link_type, capacity_bps, total_load)
-        per           = _link_per(link_type, total_load)
+        per           = _link_per(link_type, total_load, edge["distance"])
  
         link_metrics[key] = (per, _PROCESSING_DELAY_S + prop_delay + queuing_delay)
- 
+
     # ── Step 3: accumulate per-flow end-to-end metrics ────────────────────────
     results: dict[int, tuple[float, float]] = {}
     for fiveQI, path in path_dict.items():
@@ -154,6 +160,8 @@ def compute_path_metrics(
             latency += hop_delay
  
         results[fiveQI] = (1.0 - success_prob, latency)
+
+        print(f'path: {path} for flow {fiveQI} on source {source_node_id} has end-to-end PER={results[fiveQI][0]:.2e} and latency={results[fiveQI][1]:.3f}s')
  
     return results
 
@@ -204,27 +212,14 @@ class Aircraft:
         self._sync_graph_node()
 
     # ── Traffic and tunnels ───────────────────────────────────────────────────
-    @staticmethod
-    def fiveQI_to_per_latency(fiveQI: int) -> tuple[float, float]:
-        """
-        Placeholder mapping from 5G QoS class identifier to target PER and latency.
-        In a real implementation, this would be based on 3GPP specifications
-        """
-        if fiveQI == 1:   # URLLC control traffic
-            return 1e-5, 0.01  # Target PER of 10^-5 and latency of 10 ms
-        elif fiveQI == 5: # eMBB video traffic
-            return 1e-3, 0.1   # Target PER of 10^-3 and latency of 100 ms
-        else:
-            return 1e-4, 0.05  # Default targets for other traffic types
-
     def setTrafficDemand(self, trafficDemand: dict[int, TrafficDescription]) -> None:
         self.trafficDemand = trafficDemand
 
     def setUpTunnels(self, dt_tunnel: float, graph: nx.Graph) -> None:
         links = list(graph.neighbors(self.node_id))
         self.tunnels = tunnel_setup(self.node_id, dt_tunnel, graph, self.trafficDemand)
-        print(f"Aircraft {self.node_id} has links: {links}")
-        print(f"Aircraft {self.node_id} set up tunnels: {self.tunnels}")
+        #print(f"Aircraft {self.node_id} has links: {links}")
+        #print(f"Aircraft {self.node_id} set up tunnels: {self.tunnels}")
     
     # ── Data plane ────────────────────────────────────────────────────────────
     def sendData(

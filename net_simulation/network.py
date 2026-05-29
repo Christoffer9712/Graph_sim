@@ -1,35 +1,25 @@
+from unittest import case
+
 import networkx as nx
 import numpy as np
 import astropy.units as unit
-from astropy.time import TimeDelta
+
+from astropy.time import TimeDelta, Time
 from astropy.coordinates import EarthLocation
 
-from aircraft import aircraft
+from orbit.satellite import Satellite
+from aircraft.aircraft import Aircraft
 from ground_network.nodes import GroundNodeType
 from utils.coordinates import eci_to_latlon_batch
-from utils.network_link_characteristics import sample_per, markov_step
+from utils.network_link_characteristics import markov_step
 from utils.utils import haversine_m
 from config import (
-    MAX_ISL_LINK_DISTANCE, SATELLITE_ALTITUDE, LINK_PARAMS, MAX_SAT_PER_GW, MAX_SAT_PER_AC,
-    MAX_A2G_LINK_DISTANCE, LinkType, ALWAYS_UP, C_VACUUM, AIRCRRAFT_ALTITUDE
+    FEEDER_LINK_ELEVASION_THRESHOLD_DEG, MAX_ISL_LINK_DISTANCE, SATELLITE_ALTITUDE, LINK_PARAMS, MAX_SAT_PER_GW, MAX_SAT_PER_AC,
+    MAX_A2G_LINK_DISTANCE, LinkType, ALWAYS_UP, AIRCRRAFT_ALTITUDE
 )
 
-
 class DynamicNetwork:
-    """
-    Maintains a NetworkX graph of the Walker-Delta constellation.
-
-    Positions are stored internally as plain numpy arrays in meters so that
-    no Astropy Quantity ever enters the graph or the link models.
-
-    Edge attributes
-    ───────────────
-    distance  (float m)
-    link_type (LinkType)
-    state     ('UP' | 'DOWN')
-    per       (float)
-    """
-    def __init__(self, satellites, P: int, S: int, F: int, start_time, ground_network: nx.Graph, aircrafts: list, only_europe=False):
+    def __init__(self, satellites: list[Satellite], P: int, S: int, F: int, start_time: Time, ground_network: nx.Graph, aircrafts: list[Aircraft], only_europe: bool = False):
         self.satellites = satellites
         self.P = P
         self.S = S
@@ -39,12 +29,13 @@ class DynamicNetwork:
         self.ground_network = ground_network
         self.aircrafts = aircrafts
         self.aircraft_node_ids = {ac.node_id for ac in aircrafts}
+
         self._id_to_sat: dict[str, object] = {}
         self._plane_to_sat: dict[tuple, object] = {
             (s.plane, s.index): s for s in satellites
         }
-        feeder_link_elevation_threshold_deg = 20.0
-        self.max_feeder_link_dist = self.slant_range_m(float(SATELLITE_ALTITUDE.to_value(unit.m)), feeder_link_elevation_threshold_deg)
+
+        self.max_feeder_link_dist = self.slant_range_m(float(SATELLITE_ALTITUDE.to_value(unit.m)), FEEDER_LINK_ELEVASION_THRESHOLD_DEG)
         self.max_sa2a_link_dist = self.max_feeder_link_dist  # Assume same for now
         self.max_da2g_link_dist = MAX_A2G_LINK_DISTANCE
 
@@ -52,36 +43,40 @@ class DynamicNetwork:
         self.euro_graph = nx.Graph()  # Subgraph view containing only European satellites and all ground nodes
         self._euro_nodes: set[str] = set()
         self.nbrUpdates = 0
-        self._init_nodes(self.start_time)
-        self._init_edges(self.start_time)
-    # ──────────────────────────────────────────
-    # Public
-    # ──────────────────────────────────────────
 
+        self._cache_ground_node_lists()  # Pre-compute filtered lists of ground nodes for efficiency
+        self._init_nodes(self.start_time)
+        self._add_candidate_edges(self.start_time)
+    
+    # ----Public----
     def update(self, dt) -> tuple[nx.Graph, nx.Graph]:
         """
         Incremental update for one simulation step.
 
         Parameters
         ──────────
-        dt : step duration — Astropy Quantity (any time unit) or plain
-             number interpreted as seconds.
+        dt : step duration in seconds
         """
         self.nbrUpdates += 1
         t = self.start_time + TimeDelta(self.nbrUpdates * dt, format="sec")
         self._refresh_positions(t)
         self._update_existing_edges(dt,t)
         self._add_candidate_edges(t)
-
+        
+        self.euro_graph = self.graph.subgraph(self._euro_nodes).copy()
         return (self.graph, self.euro_graph)
 
-    # ──────────────────────────────────────────
-    # Initialisation
-    # ──────────────────────────────────────────
-
-    @staticmethod
-    def _node_id(sat) -> str:
-        return f'{sat.plane}-{sat.index}'
+    # ---Initialisation---
+    def _cache_ground_node_lists(self):
+        """Pre-compute filtered lists of ground nodes to avoid repeated scans."""
+        self.gw_nodes = [
+            (n, d) for n, d in self.ground_network.nodes(data=True)
+            if d['node_type'] == GroundNodeType.GATEWAY
+        ]
+        self.av_nodes = [
+            (n, d) for n, d in self.ground_network.nodes(data=True)
+            if d['node_type'] == GroundNodeType.AVIATION
+        ]
 
     def _init_nodes(self, time):
         for sat in self.satellites:
@@ -89,30 +84,32 @@ class DynamicNetwork:
             self._id_to_sat[nid] = sat
             self.graph.add_node(nid, node_type='satellite', position=sat.position)
 
-        for aircraft in self.aircrafts:
-            lat, lon = aircraft.position
-            eci_pos = self.gs_to_eci(lat, lon, AIRCRRAFT_ALTITUDE, time) # Assume aircraft is at 10 km altitude for ECI conversion
-            self.graph.add_node(aircraft.node_id,
+        for ac in self.aircrafts:
+            lat, lon = ac.position
+            eci_pos = self.gs_to_eci(lat, lon, AIRCRRAFT_ALTITUDE, time)
+            self.graph.add_node(ac.node_id,
                                 node_type='aircraft',
                                 position=eci_pos,
-                                lat=aircraft.position[0],
-                                lon=aircraft.position[1])
+                                lat=ac.position[0],
+                                lon=ac.position[1],
+                                vel=ac.vel)
 
-        positions = np.stack([sat.position.to(unit.m).value for sat in self.satellites]) * unit.m
-        lat, lon = eci_to_latlon_batch(positions, time)
-        self._euro_nodes = {
-            self._node_id(sat)
-            for sat, lat_i, lon_i in zip(self.satellites, lat, lon)
-            if self.is_in_europe(lat_i, lon_i)
-        }.union({n for n in self.ground_network.nodes()}).union(self.aircraft_node_ids)
-        self.euro_graph = self.graph.subgraph(self._euro_nodes).copy()
+        self._refresh_euro_nodes(time)
 
     def _init_edges(self, time):
-        sat_euro_ids = []
+        sat_euro_ids = self._build_isl_edges()
+        self._build_feeder_edges(sat_euro_ids, time)
+        self._build_a2s_edges(sat_euro_ids)
+        self._build_a2g_edges()
+
+    # ── Edge builders (shared by init and candidate passes) ──────────────────
+    def _build_isl_edges(self) -> set[str]:
+        """Add intra- and inter-plane ISL edges. Returns set of European sat IDs."""
+        sat_euro_ids: set[str] = set()
         for sat in self.satellites:
             u = self._node_id(sat)
             if u in self._euro_nodes:
-                sat_euro_ids.append(u)
+                sat_euro_ids.add(u)
             for neighbor, link_type in self._topology_neighbors(sat):
                 v = self._node_id(neighbor)
                 if self.only_europe and (u not in self._euro_nodes or v not in self._euro_nodes):
@@ -123,80 +120,91 @@ class DynamicNetwork:
                 if dist <= MAX_ISL_LINK_DISTANCE:
                     self._add_edge(u, v, dist, link_type, state='UP')
 
-        # ── GW ↔ satellite ────────────────────────────────────────────────────────
-        self.gw_nodes = [
-            (n, d) for n, d in self.ground_network.nodes(data=True)
-            if d['node_type'] == GroundNodeType.GATEWAY
-        ]
+        return sat_euro_ids
+
+    def _build_feeder_edges(self, sat_euro_ids: set[str], time):
+        """
+        Connect gateway nodes to nearby European satellites.
+        """
         
         for gw_id, gw_data in self.gw_nodes:
-            reachableSats = []
-            for sat_id in sat_euro_ids: # only European satellites since GW are in Europe
-                gw_pos = self.gs_to_eci(gw_data['lat'], gw_data['lon'], 0, time)
+            gw_pos = self.gs_to_eci(gw_data['lat'], gw_data['lon'], 0, time)
 
-                distance_m = self._dist_m(self.graph.nodes[sat_id]["position"], gw_pos)
-                if distance_m <= self.max_feeder_link_dist:
-                    reachableSats.append((sat_id, distance_m))
+            existing = (
+                sum(
+                    1 for _, _, d in self.graph.edges(gw_id, data=True)
+                    if d['link_type'] == LinkType.FEEDER_LINK
+                )
+            )
 
-            reachableSats.sort(key=lambda x: x[1])  # Sort by distance (closest first)
-            for sat_id, dist in reachableSats[:MAX_SAT_PER_GW]:
+            budget = (MAX_SAT_PER_GW - existing)
+
+            reachable = self._closest_sats(sat_euro_ids, gw_pos, self.max_feeder_link_dist, budget)
+            for sat_id, dist in reachable:
                 self._add_edge(gw_id, sat_id, dist, LinkType.FEEDER_LINK, state='UP')
-
-        # ──────────────────────────────────────────
-        # Aircraft - satellite and aircraft -ground
-        self.av_nodes = [
-            (n, d) for n, d in self.ground_network.nodes(data=True)
-            if d['node_type'] == GroundNodeType.AVIATION
-        ]
         
-        for aircraft in self.aircrafts:
-            reachableSats = []
-            ac_id = aircraft.node_id
+    def _build_a2s_edges(self, sat_euro_ids: set[str]):
+        """Connect each aircraft to its nearest European satellites."""
+        for ac in self.aircrafts:
+            ac_pos = self.graph.nodes[ac.node_id]['position']
+            reachable = self._closest_sats(sat_euro_ids, ac_pos, self.max_sa2a_link_dist, MAX_SAT_PER_AC)
 
-            # A2S — same elevation check as GW↔sat
-            for sat_id in sat_euro_ids:
-                distance_m = self._dist_m(self.graph.nodes[sat_id]["position"], self.graph.nodes[aircraft.node_id]["position"])
-                if distance_m <= self.max_sa2a_link_dist:
-                    reachableSats.append((sat_id, distance_m))
+            # Remove stale links that are no longer among the best candidates
+            best_ids = {sat_id for sat_id, _ in reachable}
+            stale = [
+                (ac.node_id, nbr)
+                for nbr in self.graph.neighbors(ac.node_id)
+                if (
+                    self.graph.edges[ac.node_id, nbr]['link_type'] == LinkType.SA2A
+                    and nbr not in best_ids
+                )
+            ]
+            self.graph.remove_edges_from(stale)
 
-            reachableSats.sort(key=lambda x: x[1])  # Sort by distance (closest first)
-            for sat_id, dist in reachableSats[:MAX_SAT_PER_AC]:
-                self._add_edge(aircraft.node_id, sat_id, dist, LinkType.SA2A, state='UP')
+            for sat_id, dist in reachable:
+                if not self.graph.has_edge(ac.node_id, sat_id):
+                    self._add_edge(ac.node_id, sat_id, dist, LinkType.SA2A, state='UP')
 
-            # A2G — within slant-range threshold (horizontal distance approximation)
+    def _build_a2g_edges(self):
+        """Connect each aircraft to all aviation ground nodes within range."""
+        for ac in self.aircrafts:
+            ac_lat, ac_lon = ac.position
             for av_id, av_data in self.av_nodes:
-                dist_m = haversine_m((aircraft.position[0], aircraft.position[1]), (av_data['lat'], av_data['lon']))
+                dist_m = haversine_m((ac_lat, ac_lon), (av_data['lat'], av_data['lon']))
                 if dist_m <= self.max_da2g_link_dist:
-                    self._add_edge(aircraft.node_id, av_id, dist_m, LinkType.DA2G, state='UP')
+                    self._add_edge(ac.node_id, av_id, dist_m, LinkType.DA2G, state='UP')
 
-
-    # ──────────────────────────────────────────
-    # Update helpers
-    # ──────────────────────────────────────────
-
+    
+    # ---- Update helpers ----
     def _refresh_positions(self, time):
         for sat in self.satellites:
-            # Strip units on every refresh
             self.graph.nodes[self._node_id(sat)]['position'] = sat.position
 
-        for aircraft in self.aircrafts:
-            lat, lon = aircraft.position
-            eci_pos = self.gs_to_eci(lat, lon, AIRCRRAFT_ALTITUDE, time) # Assume aircraft is at 10 km altitude for ECI conversion
-            self.graph.nodes[aircraft.node_id]['position'] = eci_pos
-            self.graph.nodes[aircraft.node_id]['lat'] = lat
-            self.graph.nodes[aircraft.node_id]['lon'] = lon
+        for ac in self.aircrafts:
+            lat, lon = ac.position
+            eci_pos = self.gs_to_eci(lat, lon, AIRCRRAFT_ALTITUDE, time)
+            self.graph.nodes[ac.node_id]['position'] = eci_pos
+            self.graph.nodes[ac.node_id]['lat'] = lat
+            self.graph.nodes[ac.node_id]['lon'] = lon
 
         if self.only_europe:
-            positions = np.stack([sat.position.to(unit.m).value for sat in self.satellites]) * unit.m
-            lat, lon = eci_to_latlon_batch(positions, time)
-            self._euro_nodes = {
+            self._refresh_euro_nodes(time)
+
+    def _refresh_euro_nodes(self, time):
+        positions = np.stack([sat.position.to(unit.m).value for sat in self.satellites]) * unit.m
+        lat, lon = eci_to_latlon_batch(positions, time)
+        self._euro_nodes = (
+            {
                 self._node_id(sat)
                 for sat, lat_i, lon_i in zip(self.satellites, lat, lon)
                 if self.is_in_europe(lat_i, lon_i)
-            }.union({n for n in self.ground_network.nodes()}).union(self.aircraft_node_ids)
-            self.euro_graph = self.graph.subgraph(self._euro_nodes).copy()
-
-
+            }
+            | set(self.ground_network.nodes())
+            | self.aircraft_node_ids
+        )
+        self.euro_graph = self.graph.subgraph(self._euro_nodes).copy()
+    
+    # ---- Edge Updates ----
     def _update_existing_edges(self, dt: float, time):
         to_remove = []
 
@@ -204,130 +212,60 @@ class DynamicNetwork:
             if self.only_europe and (u not in self._euro_nodes or v not in self._euro_nodes):
                 to_remove.append((u, v))
                 continue
-
-            if data['link_type'] == LinkType.INTER_PLANE_ISL:
-                dist_m = self._dist_m(self.graph.nodes[u]["position"], self.graph.nodes[v]["position"])
-                if dist_m > MAX_ISL_LINK_DISTANCE:
-                    to_remove.append((u, v))
-                    continue
-
-            elif data['link_type'] == LinkType.INTRA_PLANE_ISL:
-                dist_m = data['distance']
-                if dist_m > MAX_ISL_LINK_DISTANCE:
-                    to_remove.append((u, v))
-                    continue
-
-            elif data['link_type'] == LinkType.FEEDER_LINK:
-                if self.graph.nodes[u].get('node_type') == GroundNodeType.GATEWAY:
-                    gw_data = self.graph.nodes[u]
-                    sat_id = v
-                else:
-                    gw_data = self.graph.nodes[v]
-                    sat_id = u
-                gw_pos = self.gs_to_eci(gw_data['lat'], gw_data['lon'], 0, time)
-                dist_m = self._dist_m(self.graph.nodes[sat_id]["position"], gw_pos)
-                if dist_m > self.max_feeder_link_dist:
-                    to_remove.append((u, v))
-                    continue
             
-            elif data['link_type'] == LinkType.GROUND_GRID:
-                dist_m = data['distance'] # Fixed distance
+            linkType = data['link_type']
+            match linkType:
+                case LinkType.INTER_PLANE_ISL | LinkType.INTRA_PLANE_ISL:
+                    dist_m = self._dist_m(self.graph.nodes[u]["position"], self.graph.nodes[v]["position"])
+                    if dist_m > MAX_ISL_LINK_DISTANCE:
+                        to_remove.append((u, v))
+                        continue
 
-            elif data['link_type'] == LinkType.SA2A:
-                dist_m = self._dist_m(self.graph.nodes[u]["position"], self.graph.nodes[v]["position"])
-                if dist_m > self.max_sa2a_link_dist:
-                    to_remove.append((u, v))
-                    continue
+                case LinkType.FEEDER_LINK:
+                    if self.graph.nodes[u].get('node_type') == GroundNodeType.GATEWAY:
+                        gw_data = self.graph.nodes[u]
+                        sat_id = v
+                    else:
+                        gw_data = self.graph.nodes[v]
+                        sat_id = u
+                    gw_pos = self.gs_to_eci(gw_data['lat'], gw_data['lon'], 0, time)
+                    dist_m = self._dist_m(self.graph.nodes[sat_id]["position"], gw_pos)
+                    if dist_m > self.max_feeder_link_dist:
+                        to_remove.append((u, v))
+                        continue
             
-            elif data['link_type'] == LinkType.DA2G:
-                dist_m = haversine_m((self.graph.nodes[u]['lat'], self.graph.nodes[u]['lon']), (self.graph.nodes[v]['lat'], self.graph.nodes[v]['lon']))
-                if dist_m > self.max_da2g_link_dist:
-                    to_remove.append((u, v))
-                    continue
+                case LinkType.GROUND_GRID:
+                    dist_m = data['distance'] # Fixed distance
 
-            else:
-                print(f"Unknown link type {data['link_type']} for edge {u} ↔ {v}")
+                case LinkType.SA2A:
+                    dist_m = self._dist_m(self.graph.nodes[u]["position"], self.graph.nodes[v]["position"])
+                    if dist_m > self.max_sa2a_link_dist:
+                        to_remove.append((u, v))
+                        continue
+                
+                case LinkType.DA2G:
+                    dist_m = haversine_m((self.graph.nodes[u]['lat'], self.graph.nodes[u]['lon']), (self.graph.nodes[v]['lat'], self.graph.nodes[v]['lon']))
+                    if dist_m > self.max_da2g_link_dist:
+                        to_remove.append((u, v))
+                        continue
+
+                case _:
+                    print(f"Unknown link type {linkType} for edge {u} ↔ {v}")
                 
 
             data['distance'] = dist_m
-            params = LINK_PARAMS[data['link_type']]
-            if ALWAYS_UP:
-                data['state'] = 'UP'
-            else:
-                data['state'] = markov_step(data['state'], params, dist_m, dt)   # 'UP' or 'DOWN'
+            data['state'] = 'UP' if ALWAYS_UP else markov_step(data['state'], LINK_PARAMS[linkType], dist_m, dt)   # 'UP' or 'DOWN'
 
-            
         self.graph.remove_edges_from(to_remove)
 
+# ---- Candidate edge addition ----
     def _add_candidate_edges(self, time):
-        sat_euro_ids = set()
-        for sat in self.satellites:
-            u = self._node_id(sat)
-            for neighbor, link_type in self._topology_neighbors(sat):
-                v = self._node_id(neighbor)
-                if u in self._euro_nodes: # Only consider new edges between European satellites
-                    sat_euro_ids.add(u)
-                else:
-                    continue
-                if v in self._euro_nodes:
-                    sat_euro_ids.add(v)
-                else:                    
-                    continue
-                if self.graph.has_edge(u, v):
-                    continue
-                dist = self._dist_m(sat.position, neighbor.position)
-                if dist <= MAX_ISL_LINK_DISTANCE: # This assumes new links will always be up (irrespective of MTTF). Mostly problematic for European subgraph where links can come in and out of range frequently
-                    self._add_edge(u, v, dist, link_type, state='UP')
+        sat_euro_ids = self._build_isl_edges()
+        self._build_feeder_edges(sat_euro_ids, time)
+        self._build_a2s_edges(sat_euro_ids)
+        self._build_a2g_edges()
 
-        # ── GW ↔ satellite ────────────────────────────────────────────────────────
-        for gw_id, gw_data in self.gw_nodes:
-            nbr_of_links = sum(1 for _, _, d in self.graph.edges(gw_id, data=True) if d['link_type'] == LinkType.FEEDER_LINK)
-            reachableSats = []
-            for sat_id in sat_euro_ids: # only European satellites since GW are in Europe
-                gw_pos = self.gs_to_eci(gw_data['lat'], gw_data['lon'], 0, time)
-
-                distance_m = self._dist_m(self.graph.nodes[sat_id]["position"], gw_pos)
-                if distance_m <= self.max_feeder_link_dist:
-                    reachableSats.append((sat_id, distance_m))
-
-            reachableSats.sort(key=lambda x: x[1])  # Sort by distance (closest first)
-            for sat_id, dist in reachableSats[:MAX_SAT_PER_GW-nbr_of_links]:
-                self._add_edge(gw_id, sat_id, dist, LinkType.FEEDER_LINK, state='UP')
-
-        # ──────────────────────────────────────────
-        for aircraft in self.aircrafts:
-            # ──────────────────────────────────────────
-            # Aircraft - satellite and aircraft -ground
-   
-            reachableSats = []
-            for aircraft in self.aircrafts:
-                ac_id = aircraft.node_id
-
-                # A2S — same elevation check as GW↔sat
-                for sat_id in sat_euro_ids:
-                    distance_m = self._dist_m(self.graph.nodes[sat_id]["position"], self.graph.nodes[aircraft.node_id]["position"])
-                    if distance_m <= self.max_sa2a_link_dist:
-                        reachableSats.append((sat_id, distance_m))
-
-                    reachableSats.sort(key=lambda x: x[1])  # Sort by distance (closest first)
-                    to_remove = [(aircraft.node_id, nbr) for nbr in self.graph.neighbors(aircraft.node_id) if self.graph.edges[aircraft.node_id, nbr]['link_type'] == LinkType.SA2A and nbr not in {sat_id for sat_id, _ in reachableSats[:MAX_SAT_PER_AC]}]
-                    to_add = [sat_id for sat_id, _ in reachableSats[:MAX_SAT_PER_AC] if not self.graph.has_edge(aircraft.node_id, sat_id)]
-                    self.graph.remove_edges_from(to_remove)
-                    for sat_id, dist in (reachableSats[:MAX_SAT_PER_AC]):
-                        if sat_id in to_add:
-                            self._add_edge(aircraft.node_id, sat_id, dist, LinkType.SA2A, state='UP')
-
-
-                # A2G — within slant-range threshold (horizontal distance approximation)
-                for av_id, av_data in self.av_nodes:
-                    dist_m = haversine_m((aircraft.position[0], aircraft.position[1]), (av_data['lat'], av_data['lon']))
-                    if dist_m <= self.max_da2g_link_dist:
-                        self._add_edge(aircraft.node_id, av_id, dist_m, LinkType.DA2G, state='UP')
-                        
-        self.euro_graph = self.graph.subgraph(self._euro_nodes).copy()
-    # ──────────────────────────────────────────
-    # Topology & geometry
-    # ──────────────────────────────────────────
+    # ---Topology & geometry---
 
     def _topology_neighbors(self, sat) -> list[tuple]:
         p, s = sat.plane, sat.index
@@ -335,12 +273,9 @@ class DynamicNetwork:
         intra_neighbor = self._plane_to_sat[(p, (s + 1) % self.S)]
 
         next_plane = (p + 1) % self.P
-        inter_neighbors = [
-            self._plane_to_sat[(next_plane, t)]
-            for t in range(self.S)
-        ]
+
         inter_neighbor = min(
-            inter_neighbors,
+            (self._plane_to_sat[(next_plane, t)] for t in range(self.S)),
             key=lambda neighbor: self._dist_m(sat.position, neighbor.position)
         )
 
@@ -349,8 +284,17 @@ class DynamicNetwork:
             (inter_neighbor, LinkType.INTER_PLANE_ISL),
         ]
 
-    def _add_edge(self, u: str, v: str, distance_m,
-                  link_type: LinkType, state: str = 'UP'):
+    def _closest_sats(self, sat_ids: set[str], ref_pos, max_range_m: float, limit: int) -> list[tuple]:
+        """Return up to `limit` (sat_id, distance_m) pairs within range, sorted closest-first."""
+        reachable = []
+        for sat_id in sat_ids:
+            dist = self._dist_m(self.graph.nodes[sat_id]['position'], ref_pos)
+            if dist <= max_range_m:
+                reachable.append((sat_id, dist))
+        reachable.sort(key=lambda x: x[1])
+        return reachable[:limit]
+
+    def _add_edge(self, u: str, v: str, distance_m, link_type: LinkType, state: str = 'UP'):
         self.graph.add_edge(u, v,
             link_type = link_type,
             distance  = distance_m,
@@ -363,7 +307,7 @@ class DynamicNetwork:
                 state     = state,
             )
 
-    # ─── geometry helpers ─────────────────────────────────────────────────────────
+    # ─── Static helpers ─────────────────────────────────────────────────────────
     @staticmethod
     def gs_to_eci(lat, lon, alt, t):
         loc = EarthLocation(
@@ -394,3 +338,7 @@ class DynamicNetwork:
     @staticmethod
     def _dist_m(a_pos, b_pos) -> float:
         return float(np.linalg.norm((a_pos - b_pos).to(unit.m).value))
+    
+    @staticmethod
+    def _node_id(sat) -> str:
+        return f'{sat.plane}-{sat.index}'

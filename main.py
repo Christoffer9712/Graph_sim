@@ -1,4 +1,6 @@
 import math
+import astropy.units as u
+import copy
 
 from astropy.time import Time, TimeDelta
 from config import *
@@ -13,9 +15,7 @@ from ground_network import (
 )
 from aircraft.aircraft import *
 from aircraft.types import TrafficDescription
-import astropy.units as u
-import copy
-
+from aircraft.ml import (cost_function)
 # --- Initialise Ground Network ---
 gw_graph      = build_gateway_graph(get_gateways())
 aviation_graph = build_aviation_graph(generate_aviation_nodes(30))
@@ -36,7 +36,7 @@ aircraft.setTrafficDemand(demands) # Constant for now
 
 # --- Initialise Dynamic Network ---
 current_time = Time.now()
-only_europe = True
+only_europe = True # Only maintain edges between European satellites
 network = DynamicNetwork(sats, P, math.floor(T / P), F, current_time, static_ground, [aircraft], only_europe)
 propagator = Propagator(sats, [aircraft])
 
@@ -57,6 +57,7 @@ euro_graph_list = []
 time_list = [current_time]
 full_graph_list = []
 
+cost_list = []
 # --- simulation loop ---
 while t < t_end:
     graph_list.append(copy.deepcopy(graph))
@@ -67,12 +68,15 @@ while t < t_end:
         aircraft.setUpTunnels(tunnel_update_interval, euro_graph)
 
     metrics_dict = aircraft.sendData(demands, euro_graph)
+    cost_list.append(0)  # Placeholder for actual cost calculation
     for fiveQI in demands.keys():
         desc = demands[fiveQI]
         per = metrics_dict[fiveQI][0]
         latency = metrics_dict[fiveQI][1]
         print(f"Time {t:.1f}s: Aircraft {aircraft.node_id} traffic {desc}: PER={per:.2e}, latency={latency:.3f}s")
-
+        cost_list[-1] += cost_function(fiveQI=fiveQI, bw=desc.BW, per=per, latency=latency)
+    
+        #print(f"Time {t:.1f}s: Current cost for aircraft {aircraft.node_id}: {cost_list[-1]:.2f}")
     #if t % update_interval < dt or t < dt:
     #    agent.observe(full_graph, aircraft)
     #    agent.act(aircraft)
