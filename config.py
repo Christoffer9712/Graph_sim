@@ -18,7 +18,7 @@ AIRCRRAFT_ALTITUDE = 10_000
 
 # -------- Simulation parameters --------
 TIME_STEP = 30 * u.s
-SIM_DURATION = 800
+SIM_DURATION = 100
 TUNNELING_DECISION_INTERVAL = 100
 ALWAYS_UP = True  # If True, links never go DOWN (for testing visualization without stochasticity)
 

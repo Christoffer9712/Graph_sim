@@ -28,10 +28,10 @@ sats = walker.generate()
 
 # --- Initialise Aircraft ---
 aircraft = Aircraft((51,0), (41,12), 900, 'aircraft') #Aircraft 900 km/h from London to Rome
-demands = [
-    TrafficDescription(fiveQI=1, BW=5.0,  UPF='UPF_DE_Frankfurt'),  # URLLC control (later, don't hardcode UPF but use DN)
-    TrafficDescription(fiveQI=5, BW=50.0, UPF='UPF_NL_Amsterdam'),  # eMBB video
-]
+demands = {
+    1: TrafficDescription(fiveQI=1, BW=5.0*10**6,  UPF='UPF_DE_Frankfurt'),  # URLLC control (later, don't hardcode UPF but use DN)
+    5: TrafficDescription(fiveQI=5, BW=50.0*10**6, UPF='UPF_NL_Amsterdam'),  # eMBB video
+}
 aircraft.setTrafficDemand(demands) # Constant for now
 
 # --- Initialise Dynamic Network ---
@@ -62,13 +62,17 @@ while t < t_end:
     graph_list.append(copy.deepcopy(graph))
     euro_graph_list.append(copy.deepcopy(euro_graph))
     
-   # if t % update_interval < dt or t < dt:
-   #      print(f"Time {t:.1f}s: Updating tunnels for aircraft {aircraft.node_id}...")
-   #      aircraft.setUpTunnels(update_interval, euro_graph)
+    if t % tunnel_update_interval < dt or t < dt:
+        print(f"Time {t:.1f}s: Updating tunnels for aircraft {aircraft.node_id}...")
+        aircraft.setUpTunnels(tunnel_update_interval, euro_graph)
 
-    #(PER, latency) = aircraft.sendData(demands, euro_graph)
-    #print(f"Time {t:.1f}s: Aircraft at {aircraft.position}, PER={PER}, latency={latency}s")
-    
+    metrics_dict = aircraft.sendData(demands, euro_graph)
+    for fiveQI in demands.keys():
+        desc = demands[fiveQI]
+        per = metrics_dict[fiveQI][0]
+        latency = metrics_dict[fiveQI][1]
+        print(f"Time {t:.1f}s: Aircraft {aircraft.node_id} traffic {desc}: PER={per:.2e}, latency={latency:.3f}s")
+
     #if t % update_interval < dt or t < dt:
     #    agent.observe(full_graph, aircraft)
     #    agent.act(aircraft)

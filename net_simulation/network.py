@@ -87,7 +87,7 @@ class DynamicNetwork:
         for sat in self.satellites:
             nid = self._node_id(sat)
             self._id_to_sat[nid] = sat
-            self.graph.add_node(nid, position=sat.position)
+            self.graph.add_node(nid, node_type='satellite', position=sat.position)
 
         for aircraft in self.aircrafts:
             lat, lon = aircraft.position

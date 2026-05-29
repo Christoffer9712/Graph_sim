@@ -5,6 +5,7 @@ from config import C_FIBER, C_VACUUM, LinkType
 from .types import TrafficDescription, TunnelDescription
 from .base_line_tunnel import tunnel_setup
 
+
 # 1 degree of arc ≈ 111 km — used to convert speed (km/h) to deg/s.
 # Longitude degrees are shorter at high latitudes, but this approximation
 # is acceptable for a European simulation where cos(lat) ≈ 0.65–0.85.
@@ -23,50 +24,138 @@ _SPEED_BY_LINK_TYPE: dict[LinkType, float] = {
     LinkType.GROUND_GRID:    C_FIBER,
 }
 
-# Default PER per link type — TODO: replace with proper link-budget model.
-_PER_BY_LINK_TYPE: dict[LinkType, float] = {
-    lt: 1e-4 for lt in LinkType
+# Bandwidth capacity by link type.
+_BW_CAPACITY_BY_LINK_TYPE: dict[LinkType, float] = {
+    LinkType.SA2A:              1e9,  # 1 Gbps
+    LinkType.DA2G:              1e9,  # 1 Gbps
+    LinkType.INTRA_PLANE_ISL:   10e9, # 10 Gbps
+    LinkType.INTER_PLANE_ISL:   10e9,  # 10 Gbps
+    LinkType.FEEDER_LINK:       1e9,  # 1 Gbps
+    LinkType.GROUND_GRID:       10e9, # 10 Gbps
 }
 
+# ── Link-level metric models ─────────────────────────────────────────────────
+ 
+def _link_per(link_type: LinkType, total_load_bps: float) -> float:
+    """
+    Return PER for a single link given its type and total aggregated load.
+ 
+    Replace the stub below with a proper link-budget / queuing model.
+    The load argument is intentionally included in the signature so callers
+    do not need to change when the model is upgraded.
+ 
+    Parameters
+    ----------
+    link_type      : type of the link
+    total_load_bps : sum of all flow bandwidths routed over this link (bps)
+    """
+    # TODO: replace with proper link-budget model (e.g. SINR → BLER curve)
+    base_per = 1e-4
+    return base_per
+ 
+ 
+def _link_queuing_delay(link_type: LinkType, capacity_bps: float, total_load_bps: float) -> float:
+    """
+    Return queuing delay for a single link (seconds).
+ 
+    Uses an M/D/1 approximation:  W = ρ / (2μ(1−ρ))
+    where ρ = load / capacity  and  μ = capacity (deterministic service rate).
+ 
+    Falls back to zero if capacity is unknown or load exceeds it
+    (congestion should be avoided at the routing layer).
+ 
+    Parameters
+    ----------
+    link_type      : type of the link (reserved for type-specific models)
+    capacity_bps   : link capacity in bps (0 means unknown)
+    total_load_bps : sum of all flow bandwidths routed over this link (bps)
+    """
+    if capacity_bps <= 0 or total_load_bps <= 0:
+        return 0.0
+    rho = min(total_load_bps / capacity_bps, 0.9999)  # clamp to avoid div-by-zero
+    return rho / (2 * capacity_bps * (1 - rho))
+ 
+ 
+# ── Path metric computation ───────────────────────────────────────────────────
+ 
 def compute_path_metrics(
-    path: list[str],
+    path_dict: dict[int, list[str] | None],
     graph: nx.Graph,
-    source_node_id: str = "",   # used only for error messages
-) -> tuple[float, float]:
+    flow_bw_dict: dict[int, float],
+    source_node_id: str = "",
+) -> dict[int, tuple[float, float]]:
     """
-    Walk *path* hop by hop and return ``(end_to_end_per, total_latency_s)``.
+    Compute end-to-end (PER, latency) for each flow, accounting for the fact
+    that multiple flows may share links and therefore affect each other's
+    queuing delay and error rate.
  
-    PER_total = 1 − ∏ (1 − PER_link)
+    Algorithm
+    ---------
+    1. Aggregate total bandwidth onto each (u, v) link across all active flows.
+    2. Compute per-link PER and queuing delay once, using the aggregated load.
+    3. Walk each flow's path and sum the per-link contributions.
  
-    Raises
-    ------
-    ValueError
-        If an edge is absent from the graph or carries an unrecognised link type.
+    Parameters
+    ----------
+    path_dict      : fiveQI → ordered node list (or None if no path was found)
+    graph          : current network snapshot
+    flow_bw_dict   : fiveQI → bandwidth demand in bps for that flow
+    source_node_id : included in error messages only
+ 
+    Returns
+    -------
+    fiveQI → (end_to_end_per, total_latency_s)
+    Flows with no path are returned as (1.0, inf).
     """
-    success_prob = 1.0
-    latency = 0.0
+    # ── Step 1: aggregate load per link ──────────────────────────────────────
+    # Use a canonical edge key (frozenset) so direction doesn't matter.
+    link_load: dict[frozenset, float] = {}
+    for fiveQI, path in path_dict.items():
+        if path is None:
+            continue
+        bw = flow_bw_dict.get(fiveQI, 0.0)
+        for u, v in zip(path[:-1], path[1:]):
+            key = frozenset((u, v))
+            link_load[key] = link_load.get(key, 0.0) + bw
  
-    for u, v in zip(path[:-1], path[1:]):
+    # ── Step 2: compute per-link metrics under aggregated load ────────────────
+    link_metrics: dict[frozenset, tuple[float, float]] = {}  # key → (per, delay_s)
+    for key, total_load in link_load.items():
+        u, v = tuple(key)
         edge = graph.get_edge_data(u, v)
         if edge is None:
-            raise ValueError(
-                f"Edge ({u}, {v}) not found in graph"
-                + (f" (source: {source_node_id})" if source_node_id else "")
-            )
+            suffix = f" (source: {source_node_id})" if source_node_id else ""
+            raise ValueError(f"Edge ({u}, {v}) not found in graph{suffix}")
  
         link_type = edge.get("link_type")
         speed = _SPEED_BY_LINK_TYPE.get(link_type)
-        per = _PER_BY_LINK_TYPE.get(link_type)
-        if speed is None or per is None:
-            raise ValueError(
-                f"Edge ({u}, {v}) has unrecognised link type '{link_type}'"
-            )
+        if speed is None:
+            raise ValueError(f"Edge ({u}, {v}) has unrecognised link type '{link_type}'")
  
-        latency += _PROCESSING_DELAY_S + edge["distance"] / speed
-        success_prob *= 1.0 - per
+        capacity_bps  = _BW_CAPACITY_BY_LINK_TYPE.get(link_type)
+        prop_delay    = edge["distance"] / speed
+        queuing_delay = _link_queuing_delay(link_type, capacity_bps, total_load)
+        per           = _link_per(link_type, total_load)
  
-    return 1.0 - success_prob, latency
+        link_metrics[key] = (per, _PROCESSING_DELAY_S + prop_delay + queuing_delay)
  
+    # ── Step 3: accumulate per-flow end-to-end metrics ────────────────────────
+    results: dict[int, tuple[float, float]] = {}
+    for fiveQI, path in path_dict.items():
+        if path is None:
+            results[fiveQI] = (1.0, float("inf"))
+            continue
+ 
+        success_prob = 1.0
+        latency = 0.0
+        for u, v in zip(path[:-1], path[1:]):
+            per, hop_delay = link_metrics[frozenset((u, v))]
+            success_prob *= 1.0 - per
+            latency += hop_delay
+ 
+        results[fiveQI] = (1.0 - success_prob, latency)
+ 
+    return results
 
 class Aircraft:
     def __init__(self, startPos, destPos, speed_kph: float, node_id: str):
@@ -83,7 +172,7 @@ class Aircraft:
         self.position = self.startPos.copy()
         self.arrived  = False
         self.tunnels: list[TunnelDescription] = []
-        self.trafficDemand: list[TrafficDescription] = []
+        self.trafficDemand: dict[int, TrafficDescription] = {}
 
         direction         = (self.destPos - self.startPos)
         direction         = direction / np.linalg.norm(direction)
@@ -128,8 +217,8 @@ class Aircraft:
         else:
             return 1e-4, 0.05  # Default targets for other traffic types
 
-    def setTrafficDemand(self, trafficDemand: list[TrafficDescription]) -> None:
-        self.trafficDemand = list(trafficDemand)
+    def setTrafficDemand(self, trafficDemand: dict[int, TrafficDescription]) -> None:
+        self.trafficDemand = trafficDemand
 
     def setUpTunnels(self, dt_tunnel: float, graph: nx.Graph) -> None:
         links = list(graph.neighbors(self.node_id))
@@ -140,31 +229,29 @@ class Aircraft:
     # ── Data plane ────────────────────────────────────────────────────────────
     def sendData(
         self,
-        traffic: list[TrafficDescription],
+        traffic: dict[int, TrafficDescription],
         graph:   nx.Graph,
-    ) -> tuple[list[float], list[float]]:
-        per_list, latency_list = [], []
-        for desc in traffic:
+    ) -> dict[int, tuple[float, float]]:
+        metrics_dict = {} # fiveQI -> (PER, latency). Works because we aggregate traffic by 5QI. Also, assume at most one tunnel per 5QI
+        path_dict = {} # fiveQI -> path list
+        flow_bw_dict = {} # fiveQI -> bandwidth demand in bps
+        for fiveQI, desc in traffic.items():
             tunnel = self._mapToTunnel(desc)
             if tunnel is None:
                 print(f"No tunnel found for traffic demand {desc} on aircraft {self.node_id}")
-                per_list.append(1.0)
-                latency_list.append(float('inf'))
+                path_dict[fiveQI] = None
                 continue
             
             path = self._getPath(tunnel, graph)
             if path is None:
                 print(f"Path not found for tunnel {tunnel} on aircraft {self.node_id}")
-                per_list.append(1.0)
-                latency_list.append(float('inf'))
-                continue
             
-            per, latency = compute_path_metrics(path, graph)
-            per_list.append(per)
-            latency_list.append(latency)
-            print(f"Aircraft {self.node_id} traffic {desc}: path={path}, PER={per:.2e}, latency={latency:.3f}s")
-        
-        return per_list, latency_list
+            path_dict[desc.fiveQI] = path
+            flow_bw_dict[fiveQI] = desc.BW
+
+        metrics_dict = compute_path_metrics(path_dict, graph, flow_bw_dict, self.node_id)
+
+        return metrics_dict
 
     # ── Private Helpers ──────────────────────────────────────────────────────────────
     def _sync_graph_node(self) -> None:

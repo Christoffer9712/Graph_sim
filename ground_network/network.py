@@ -61,8 +61,8 @@ def _connect_ground_nodes_as_grid(G: nx.Graph, max_neighbors: int) -> None:
             continue
         ltype=LinkType.GROUND_GRID
         G.add_edge(u, v,
-                   link_type= ltype,
-                   distance=dist_m,
+                   link_type = ltype,
+                   distance = dist_m,
         )
         degree[i] += 1
         degree[j] += 1
