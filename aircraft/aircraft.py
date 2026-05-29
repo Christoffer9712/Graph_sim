@@ -1,12 +1,72 @@
 import numpy as np
 import networkx as nx
-from .types import TrafficDescription, TunnelDescription, LinkType
-from astropy import units as u
+
+from config import C_FIBER, C_VACUUM, LinkType
+from .types import TrafficDescription, TunnelDescription
+from .base_line_tunnel import tunnel_setup
+
 # 1 degree of arc ≈ 111 km — used to convert speed (km/h) to deg/s.
 # Longitude degrees are shorter at high latitudes, but this approximation
 # is acceptable for a European simulation where cos(lat) ≈ 0.65–0.85.
 _KM_PER_DEG = 111.0 # 6381*2*pi/360
 
+# Per-hop processing baseline added to latency on every link.
+_PROCESSING_DELAY_S = 0.0005  # 0.5 ms  — TODO: replace with link-specific model
+
+# Propagation speed by medium.
+_SPEED_BY_LINK_TYPE: dict[LinkType, float] = {
+    LinkType.SA2A:           C_VACUUM,
+    LinkType.DA2G:           C_VACUUM,
+    LinkType.INTRA_PLANE_ISL: C_VACUUM,
+    LinkType.INTER_PLANE_ISL: C_VACUUM,
+    LinkType.FEEDER_LINK:    C_VACUUM,
+    LinkType.GROUND_GRID:    C_FIBER,
+}
+
+# Default PER per link type — TODO: replace with proper link-budget model.
+_PER_BY_LINK_TYPE: dict[LinkType, float] = {
+    lt: 1e-4 for lt in LinkType
+}
+
+def compute_path_metrics(
+    path: list[str],
+    graph: nx.Graph,
+    source_node_id: str = "",   # used only for error messages
+) -> tuple[float, float]:
+    """
+    Walk *path* hop by hop and return ``(end_to_end_per, total_latency_s)``.
+ 
+    PER_total = 1 − ∏ (1 − PER_link)
+ 
+    Raises
+    ------
+    ValueError
+        If an edge is absent from the graph or carries an unrecognised link type.
+    """
+    success_prob = 1.0
+    latency = 0.0
+ 
+    for u, v in zip(path[:-1], path[1:]):
+        edge = graph.get_edge_data(u, v)
+        if edge is None:
+            raise ValueError(
+                f"Edge ({u}, {v}) not found in graph"
+                + (f" (source: {source_node_id})" if source_node_id else "")
+            )
+ 
+        link_type = edge.get("link_type")
+        speed = _SPEED_BY_LINK_TYPE.get(link_type)
+        per = _PER_BY_LINK_TYPE.get(link_type)
+        if speed is None or per is None:
+            raise ValueError(
+                f"Edge ({u}, {v}) has unrecognised link type '{link_type}'"
+            )
+ 
+        latency += _PROCESSING_DELAY_S + edge["distance"] / speed
+        success_prob *= 1.0 - per
+ 
+    return 1.0 - success_prob, latency
+ 
 
 class Aircraft:
     def __init__(self, startPos, destPos, speed_kph: float, node_id: str):
@@ -14,7 +74,7 @@ class Aircraft:
         Parameters
         ----------
         startPos, destPos : (lat, lon) in degrees
-        speed_kph         : cruise speed in km/h
+        speed_kph         : cruise speed in km/h relative to the ground
         node_id           : graph node identifier string
         """
         self.startPos = np.array(startPos, dtype=float)
@@ -22,60 +82,21 @@ class Aircraft:
         self.node_id  = node_id
         self.position = self.startPos.copy()
         self.arrived  = False
+        self.tunnels: list[TunnelDescription] = []
+        self.trafficDemand: list[TrafficDescription] = []
 
-        # Direction unit vector in lat/lon space, velocity in deg/s
-        direction         = (self.destPos - self.startPos) / np.linalg.norm(self.destPos - self.startPos)
+        direction         = (self.destPos - self.startPos)
+        direction         = direction / np.linalg.norm(direction)
         speed_deg_per_s   = speed_kph / _KM_PER_DEG / 3600.0
         self.vel          = speed_deg_per_s * direction
 
-        # The aircraft's own single-node graph, merged into the full graph each step.
-        # We store both 'position' (tuple) for topology checks and
-        # 'lat'/'lon' scalars for convenience elsewhere.
         self.graph = nx.Graph()
         self._sync_graph_node()
 
-        self.trafficDemand: list[TrafficDescription] = []
-        self.tunnels:       list[TunnelDescription]  = []
-
-    # ── internal ──────────────────────────────────────────────────────────────
-
-    def _sync_graph_node(self) -> None:
-        """Write current position into the graph node attributes."""
-        lat, lon = float(self.position[0]), float(self.position[1])
-        if self.node_id in self.graph:
-            self.graph.nodes[self.node_id].update(
-                type='aircraft',
-                position=(lat, lon),
-                lat=lat,
-                lon=lon
-            )
-        else:
-            self.graph.add_node(
-                self.node_id,
-                node_type='aircraft',
-                position=(lat, lon),
-                lat=lat,
-                lon=lon,
-            )
-
-    def fiveQI_to_per_latency(self, fiveQI: int) -> tuple[float, float]:
-        """
-        Placeholder mapping from 5G QoS class identifier to target PER and latency.
-        In a real implementation, this would be based on 3GPP specifications and
-        might also consider the specific application type, SLAs, etc.
-        """
-        if fiveQI == 1:   # URLLC control traffic
-            return 1e-5, 0.01  # Target PER of 10^-5 and latency of 10 ms
-        elif fiveQI == 5: # eMBB video traffic
-            return 1e-3, 0.1   # Target PER of 10^-3 and latency of 100 ms
-        else:
-            return 1e-4, 0.05  # Default targets for other traffic types
-
-    # ── movement ──────────────────────────────────────────────────────────────
-
+    # ── Kinematics ─────────────────────────────────────────────────────────────
     def propagate(self, dt: float) -> None:
         """
-        Advance position by dt seconds along the great-circle approximation.
+        Advance position by dt seconds.
         Clamps to destination once arrived so the node stays in the graph.
         """
         if self.arrived:
@@ -93,39 +114,30 @@ class Aircraft:
         self.position = candidate
         self._sync_graph_node()
 
-    # ── traffic and tunnels ───────────────────────────────────────────────────
+    # ── Traffic and tunnels ───────────────────────────────────────────────────
+    @staticmethod
+    def fiveQI_to_per_latency(fiveQI: int) -> tuple[float, float]:
+        """
+        Placeholder mapping from 5G QoS class identifier to target PER and latency.
+        In a real implementation, this would be based on 3GPP specifications
+        """
+        if fiveQI == 1:   # URLLC control traffic
+            return 1e-5, 0.01  # Target PER of 10^-5 and latency of 10 ms
+        elif fiveQI == 5: # eMBB video traffic
+            return 1e-3, 0.1   # Target PER of 10^-3 and latency of 100 ms
+        else:
+            return 1e-4, 0.05  # Default targets for other traffic types
 
     def setTrafficDemand(self, trafficDemand: list[TrafficDescription]) -> None:
         self.trafficDemand = list(trafficDemand)
 
     def setUpTunnels(self, dt_tunnel: float, graph: nx.Graph) -> None:
-        # Lazy import avoids the circular dependency between aircraft ↔ ml
-        
-        #from aircraft import ml as ML
-        #self.tunnels = ML.get_tunnels(
-        #    self.trafficDemand, dt_tunnel, graph, self.node_id
-        #)
-        #for edge in graph.edges([self.node_id]):
-        #    print(f"Aircraft {self.node_id} has edge: {edge}")
-        #
         links = list(graph.neighbors(self.node_id))
-
+        self.tunnels = tunnel_setup(self.node_id, dt_tunnel, graph, self.trafficDemand)
         print(f"Aircraft {self.node_id} has links: {links}")
-
-        #sorted_traffic_demand = sorted(self.trafficDemand, key=lambda x: x.fiveQI)
-
-
-        self.tunnels = [TunnelDescription(
-            fiveQI=desc.fiveQI,
-            BW=desc.BW,
-            linkType=LinkType.SA2A,  # Placeholder; replace with actual link type
-            firstHop=links[0],             # Placeholder; replace with actual first hop
-            GW='GW_NL_Burum',                   # Placeholder; replace with actual GW
-            UPF=desc.UPF                   # Placeholder; replace with actual UPF
-        ) for desc in self.trafficDemand]
         print(f"Aircraft {self.node_id} set up tunnels: {self.tunnels}")
-    # ── data plane ────────────────────────────────────────────────────────────
-
+    
+    # ── Data plane ────────────────────────────────────────────────────────────
     def sendData(
         self,
         traffic: list[TrafficDescription],
@@ -133,25 +145,46 @@ class Aircraft:
     ) -> tuple[list[float], list[float]]:
         per_list, latency_list = [], []
         for desc in traffic:
-            tunnel = self.mapToTunnel(desc)
+            tunnel = self._mapToTunnel(desc)
             if tunnel is None:
                 print(f"No tunnel found for traffic demand {desc} on aircraft {self.node_id}")
                 per_list.append(1.0)
                 latency_list.append(float('inf'))
                 continue
-            path = self.getPath(tunnel, graph)
+            
+            path = self._getPath(tunnel, graph)
             if path is None:
                 print(f"Path not found for tunnel {tunnel} on aircraft {self.node_id}")
                 per_list.append(1.0)
                 latency_list.append(float('inf'))
                 continue
-            per, latency = self.getPathMetrics(path, graph)
+            
+            per, latency = compute_path_metrics(path, graph)
             per_list.append(per)
             latency_list.append(latency)
             print(f"Aircraft {self.node_id} traffic {desc}: path={path}, PER={per:.2e}, latency={latency:.3f}s")
+        
         return per_list, latency_list
 
-    def mapToTunnel(self, desc: TrafficDescription) -> TunnelDescription | None:
+    # ── Private Helpers ──────────────────────────────────────────────────────────────
+    def _sync_graph_node(self) -> None:
+        """Write current position into the graph node attributes."""
+        lat, lon = float(self.position[0]), float(self.position[1])
+        if self.node_id in self.graph:
+            self.graph.nodes[self.node_id].update(
+                node_type='aircraft',
+                position=(lat, lon),
+                vel = (self.vel[0], self.vel[1]) # degrees/s in lat/lon directions
+            )
+        else:
+            self.graph.add_node(
+                self.node_id,
+                node_type='aircraft',
+                position=(lat, lon),
+                vel = (self.vel[0], self.vel[1]) # degrees/s in lat/lon directions
+            )
+    
+    def _mapToTunnel(self, desc: TrafficDescription) -> TunnelDescription | None:
         """
         Return the first established tunnel that satisfies the QoS class and BW.
         A production version would track remaining capacity per tunnel and
@@ -162,7 +195,7 @@ class Aircraft:
                 return tunnel
         return None
 
-    def getPath(
+    def _getPath(
         self, tunnel: TunnelDescription, graph: nx.Graph
     ) -> list | None:
         """
@@ -185,27 +218,3 @@ class Aircraft:
             return None
 
         return path
-
-    def getPathMetrics(
-        self, path: list, graph: nx.Graph
-    ) -> tuple[float, float]:
-        """
-        Walk the path hop-by-hop and accumulate:
-          PER     — end-to-end packet error rate (multiplicative through link success probs)
-          latency — sum of per-hop propagation delays in seconds
-
-        PER_total = 1 − ∏(1 − PER_link)
-        Falls back to conservative defaults if edge attributes are missing
-        (e.g. ISL edges that predate the latency/per additions).
-        """
-        success_prob = 1.0
-        latency      = 0.0
-        for u, v in zip(path[:-1], path[1:]):
-            edge = graph.get_edge_data(u, v) or {}
-            #success_prob *= 1.0 - edge.get('per',     1e-4)
-            #latency      +=       edge.get('latency', 5e-3)   # 5 ms default
-
-            print(f"Edge ({u}, {v}) attributes: {edge}")
-            success_prob *= 1.0 - edge['per']
-            latency      +=       edge['latency']
-        return 1.0 - success_prob, latency

@@ -12,11 +12,11 @@ def _get_closest_da2g_link(graph: nx.Graph, node_id: str, target_node: str) -> s
     return closest_link
 
 
-def tunnel_setup(dt_tunnel: float, graph: nx.Graph, trafficDemand: list[TrafficDescription]) -> list[TunnelDescription]:
+def tunnel_setup(aircraft_id: str, dt_tunnel: float, graph: nx.Graph, trafficDemand: list[TrafficDescription]) -> list[TunnelDescription]:
     sorted_traffic_demand = sorted(trafficDemand, key=lambda x: x.fiveQI) 
     tunnels = []
     for desc in sorted_traffic_demand:
-        closest_link = _get_closest_da2g_link(graph, 'aircraft', desc.UPF)
+        closest_link = _get_closest_da2g_link(graph, aircraft_id, desc.UPF)
         tunnels.append(TunnelDescription(
             fiveQI=desc.fiveQI,
             BW=desc.BW,
@@ -25,6 +25,8 @@ def tunnel_setup(dt_tunnel: float, graph: nx.Graph, trafficDemand: list[TrafficD
             GW=closest_link,               # Placeholder; replace with actual GW
             UPF=desc.UPF              # Placeholder; replace with actual UPF
         ))
+
+    return tunnels
 
 
 

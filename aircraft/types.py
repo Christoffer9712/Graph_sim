@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import IntEnum
+from config import LinkType
 
 
 @dataclass(frozen=True)
@@ -7,12 +8,6 @@ class TrafficDescription:
     fiveQI: int
     BW:     float   # Mbps
     UPF:    str
-
-
-class LinkType(IntEnum):
-    SA2A = 1   # satellite air-to-air link
-    DA2G = 2   # direct air-to-ground link
-
 
 @dataclass(frozen=True)
 class TunnelDescription:
