@@ -133,12 +133,12 @@ def compute_path_metrics(
             suffix = f" (source: {source_node_id})" if source_node_id else ""
             raise ValueError(f"Edge ({u}, {v}) not found in graph{suffix}")
  
-        link_type = edge.get("link_type")
+        link_type = edge["link_type"]       
         speed = _SPEED_BY_LINK_TYPE.get(link_type)
         if speed is None:
             raise ValueError(f"Edge ({u}, {v}) has unrecognised link type '{link_type}'")
  
-        capacity_bps  = _BW_CAPACITY_BY_LINK_TYPE.get(link_type)
+        capacity_bps  = _BW_CAPACITY_BY_LINK_TYPE[link_type]
         prop_delay    = edge["distance"] / speed
         queuing_delay = _link_queuing_delay(link_type, capacity_bps, total_load)
         per           = _link_per(link_type, total_load, edge["distance"])

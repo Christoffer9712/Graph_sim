@@ -74,6 +74,7 @@ def _add_node(G: nx.Graph, node: GroundNode) -> None:
         node_type=node.node_type,
         lat=node.lat,
         lon=node.lon,
+        dn=node.dn if node.node_type == GroundNodeType.UPF else None
     )
 
 

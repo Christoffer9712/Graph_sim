@@ -7,7 +7,7 @@ from config import LinkType
 class TrafficDescription:
     fiveQI: int
     BW:     float   # Mbps
-    UPF:    str
+    DN:    str
 
 @dataclass(frozen=True)
 class TunnelDescription:
