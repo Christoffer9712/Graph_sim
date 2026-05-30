@@ -11,6 +11,6 @@ class GroundNodeType(str):
 @dataclass(frozen=True)
 class GroundNode:
     node_id:   str
-    node_type: GroundNodeType
+    node_type: str
     lat:       float
     lon:       float

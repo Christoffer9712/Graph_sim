@@ -56,7 +56,7 @@ def _link_per(link_type: LinkType, total_load_bps: float, distance_m: float) -> 
     else:
         utilization = total_load_bps / _BW_CAPACITY_BY_LINK_TYPE.get(link_type, 1e9)
         per = sample_per(LINK_PARAMS[link_type], distance_m, utilization)
-    print(f"Computed PER={per:.2e} for link type {link_type} with distance {distance_m:.1f}m and load {total_load_bps:.1f}bps (utilization {utilization:.2%})")
+    #print(f"Computed PER={per:.2e} for link type {link_type} with distance {distance_m:.1f}m and load {total_load_bps:.1f}bps (utilization {utilization:.2%})")
     return per
  
  

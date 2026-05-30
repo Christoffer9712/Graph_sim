@@ -18,9 +18,9 @@ AIRCRRAFT_ALTITUDE = 10_000
 
 # -------- Simulation parameters --------
 TIME_STEP = 10 * u.s
-SIM_DURATION = 100
+SIM_DURATION = 200
 TUNNELING_DECISION_INTERVAL = 30
-ALWAYS_UP = True  # If True, links never go DOWN (for testing visualization without stochasticity)
+ALWAYS_UP = False #True  # If True, links never go DOWN (for testing visualization without stochasticity)
 
 # -------- Link parameters --------
 MAX_ISL_LINK_DISTANCE = 10000_000.0  # Maximum distance for inter-satellite links (1000 km)
@@ -63,7 +63,7 @@ LINK_PARAMS: dict[LinkType, LinkParams] = {
         per_ref=1e-5,    gamma_per=2.0, alpha_load=0.5, cv=0.1,
     ),
     LinkType.INTER_PLANE_ISL: LinkParams(
-        mttf_ref=3_000,  d_ref=1000_000, mttr=1000, gamma_fail=1.0,
+        mttf_ref=1_000,  d_ref=1000_000, mttr=1000, gamma_fail=1.0,
         per_ref=1e-4,    gamma_per=2.0, alpha_load=0.5, cv=0.2,
     ),
     LinkType.SA2A: LinkParams(

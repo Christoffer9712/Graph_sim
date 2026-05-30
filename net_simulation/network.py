@@ -39,6 +39,8 @@ class DynamicNetwork:
         self.max_sa2a_link_dist = self.max_feeder_link_dist  # Assume same for now
         self.max_da2g_link_dist = MAX_A2G_LINK_DISTANCE
 
+        self._topology_neighbors_cache = {}  # Cache topology neighbors for each satellite to avoid repeated calculations
+
         self.graph = ground_network.copy()  # Start with the ground network; we'll add satellites and ISLs to this
         self.euro_graph = nx.Graph()  # Subgraph view containing only European satellites and all ground nodes
         self._euro_nodes: set[str] = set()
@@ -46,7 +48,7 @@ class DynamicNetwork:
 
         self._cache_ground_node_lists()  # Pre-compute filtered lists of ground nodes for efficiency
         self._init_nodes(self.start_time)
-        self._add_candidate_edges(self.start_time)
+        self._add_candidate_edges(self.start_time, rebuild_isl=True)
     
     # ----Public----
     def update(self, dt) -> tuple[nx.Graph, nx.Graph]:
@@ -61,7 +63,7 @@ class DynamicNetwork:
         t = self.start_time + TimeDelta(self.nbrUpdates * dt, format="sec")
         self._refresh_positions(t)
         self._update_existing_edges(dt,t)
-        self._add_candidate_edges(t)
+        self._add_candidate_edges(t, rebuild_isl=False)
         
         self.euro_graph = self.graph.subgraph(self._euro_nodes).copy()
         return (self.graph, self.euro_graph)
@@ -96,21 +98,18 @@ class DynamicNetwork:
 
         self._refresh_euro_nodes(time)
 
-    def _init_edges(self, time):
-        sat_euro_ids = self._build_isl_edges()
-        self._build_feeder_edges(sat_euro_ids, time)
-        self._build_a2s_edges(sat_euro_ids)
-        self._build_a2g_edges()
-
     # ── Edge builders (shared by init and candidate passes) ──────────────────
-    def _build_isl_edges(self) -> set[str]:
+    def _build_isl_edges(self, recalculate_neighbors: bool = True) -> set[str]:
         """Add intra- and inter-plane ISL edges. Returns set of European sat IDs."""
         sat_euro_ids: set[str] = set()
         for sat in self.satellites:
             u = self._node_id(sat)
+            if recalculate_neighbors:
+                neighbors = self._topology_neighbors(sat)
+                self._topology_neighbors_cache[u] = neighbors
             if u in self._euro_nodes:
                 sat_euro_ids.add(u)
-            for neighbor, link_type in self._topology_neighbors(sat):
+            for neighbor, link_type in self._topology_neighbors_cache[u]:
                 v = self._node_id(neighbor)
                 if self.only_europe and (u not in self._euro_nodes or v not in self._euro_nodes):
                     continue
@@ -235,7 +234,7 @@ class DynamicNetwork:
                         continue
             
                 case LinkType.GROUND_GRID:
-                    dist_m = data['distance'] # Fixed distance
+                    continue  # Ground links are static
 
                 case LinkType.SA2A:
                     dist_m = self._dist_m(self.graph.nodes[u]["position"], self.graph.nodes[v]["position"])
@@ -259,8 +258,8 @@ class DynamicNetwork:
         self.graph.remove_edges_from(to_remove)
 
 # ---- Candidate edge addition ----
-    def _add_candidate_edges(self, time):
-        sat_euro_ids = self._build_isl_edges()
+    def _add_candidate_edges(self, time, rebuild_isl: bool = False):
+        sat_euro_ids = self._build_isl_edges(rebuild_isl) # Reuse topology neighbors but don't add edges again
         self._build_feeder_edges(sat_euro_ids, time)
         self._build_a2s_edges(sat_euro_ids)
         self._build_a2g_edges()
