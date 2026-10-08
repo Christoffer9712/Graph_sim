@@ -8,7 +8,7 @@ class ML:
     def __init__(self):
         self.buffer = ReplayBuffer(storage=LazyTensorStorage(1000))
 
-    def add_experience():
+    #def add_experience():
 
 
     @staticmethod

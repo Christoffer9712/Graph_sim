@@ -15,8 +15,9 @@ from ground_network import (
 )
 from aircraft.aircraft import *
 from aircraft.types import TrafficDescription
-from aircraft.ml import (cost_function, initial_tunnel_cost)
+#from aircraft.ml import (cost_function, initial_tunnel_cost)
 # --- Initialise Ground Network ---
+
 gw_graph      = build_gateway_graph(get_gateways())
 aviation_graph = build_aviation_graph(generate_aviation_nodes(30))
 upf_graph     = build_upf_graph(get_upfs())
@@ -68,7 +69,7 @@ while t < t_end:
         prev_tunnels = aircraft.tunnels
         aircraft.setUpTunnels(tunnel_update_interval, euro_graph)
         
-        tunnel_selection_cost = initial_tunnel_cost(prev_tunnels, aircraft.tunnels)
+        #tunnel_selection_cost = initial_tunnel_cost(prev_tunnels, aircraft.tunnels)
 
     metrics_dict = aircraft.sendData(demands, euro_graph)
     for fiveQI in demands.keys():
@@ -76,7 +77,7 @@ while t < t_end:
         per = metrics_dict[fiveQI][0]
         latency = metrics_dict[fiveQI][1]
         print(f"Time {t:.1f}s: Aircraft {aircraft.node_id} traffic {desc}: PER={per:.2e}, latency={latency:.3f}s")
-        tunnel_selection_cost += cost_function(fiveQI=fiveQI, bw=desc.BW, per=per, latency=latency)
+        #tunnel_selection_cost += cost_function(fiveQI=fiveQI, bw=desc.BW, per=per, latency=latency)
     
         #print(f"Time {t:.1f}s: Current cost for aircraft {aircraft.node_id}: {cost_list[-1]:.2f}")
     #if t % update_interval < dt or t < dt:
