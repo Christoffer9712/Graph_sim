@@ -1,5 +1,4 @@
 import math
-import astropy.units as u
 import copy
 
 from astropy.time import Time, TimeDelta
@@ -28,29 +27,23 @@ walker = WalkerDelta(T, P, F, INC, SATELLITE_ALTITUDE)
 sats = walker.generate()
 
 # --- Initialise Aircraft ---
-aircraft = Aircraft((51,0), (41,12), 900, 'aircraft') #Aircraft 900 km/h from London to Rome
-demands = {
-    1: TrafficDescription(fiveQI=1, BW=5.0*10**6,  DN='ATM_Frankfurt'),  # URLLC control (later, don't hardcode UPF but use DN)
-    5: TrafficDescription(fiveQI=5, BW=50.0*10**6, DN='Internet'),  # eMBB video
-}
-aircraft.setTrafficDemand(demands) # Constant for now
+aircraft1 = Aircraft((51,-50), (41,12), 900, 'aircraft1') #Aircraft 900 km/h from North Atlantic Ocean to Rome
+aircraft2 = Aircraft((48,-45), (41,12), 900, 'aircraft2') #Aircraft 900 km/h from North Atlantic Ocean to Rome
+aircrafts = [aircraft1, aircraft2]
 
 # --- Initialise Dynamic Network ---
-current_time = Time.now()
-only_europe = True # Only maintain edges between European satellites
-network = DynamicNetwork(sats, P, math.floor(T / P), F, current_time, static_ground, [aircraft], only_europe)
-propagator = Propagator(sats, [aircraft])
+current_time = Time("2026-10-08 14:30:00", scale="utc") #Time.now()
+network = DynamicNetwork(sats, P, math.floor(T / P), F, current_time, static_ground, aircrafts)
+propagator = Propagator(sats, aircrafts)
 
 # Simulation parameters
 t = 0.0
 t_end = SIM_DURATION
-dt = float(TIME_STEP.to_value(u.s))
-tunnel_update_interval = TUNNELING_DECISION_INTERVAL
-update_step = tunnel_update_interval // dt
+dt = TIME_STEP
 
 # For visualization, we store a copy of the graph at every time step.
-graph = network.graph
-graph_list = []
+#graph = network.graph
+#graph_list = []
 
 euro_graph = network.euro_graph
 euro_graph_list = []
@@ -61,31 +54,17 @@ full_graph_list = []
 tunnel_selection_cost = 0
 # --- simulation loop ---
 while t < t_end:
-    graph_list.append(copy.deepcopy(graph))
+    #graph_list.append(copy.deepcopy(graph))
     euro_graph_list.append(copy.deepcopy(euro_graph))
     
-    if t % tunnel_update_interval < dt or t < dt:
-        print(f"Time {t:.1f}s: Updating tunnels for aircraft {aircraft.node_id}...")
-        prev_tunnels = aircraft.tunnels
-        aircraft.setUpTunnels(tunnel_update_interval, euro_graph)
-        
-        #tunnel_selection_cost = initial_tunnel_cost(prev_tunnels, aircraft.tunnels)
-
-    metrics_dict = aircraft.sendData(demands, euro_graph)
-    for fiveQI in demands.keys():
-        desc = demands[fiveQI]
-        per = metrics_dict[fiveQI][0]
-        latency = metrics_dict[fiveQI][1]
-        print(f"Time {t:.1f}s: Aircraft {aircraft.node_id} traffic {desc}: PER={per:.2e}, latency={latency:.3f}s")
-        #tunnel_selection_cost += cost_function(fiveQI=fiveQI, bw=desc.BW, per=per, latency=latency)
-    
-        #print(f"Time {t:.1f}s: Current cost for aircraft {aircraft.node_id}: {cost_list[-1]:.2f}")
-    #if t % update_interval < dt or t < dt:
-    #    agent.observe(full_graph, aircraft)
-    #    agent.act(aircraft)
-
     propagator.step(TIME_STEP)
-    (graph, euro_graph) = network.update(dt)
+    (_, euro_graph) = network.update(dt)
+    ovls = network.get_ovls('aircraft1', 'UPF_DE_Frankfurt', 3, current_time) 
+    for ovl in ovls:
+        udl = network.get_udl_path(ovl['overlay_path'])
+        if udl:
+            print(f'udl {udl} -- {network.get_udl_path_delay(udl, current_time)*1000} ms delay at time {t}')
+
     current_time += TimeDelta(dt, format="sec")
     time_list.append(current_time)
     t += dt
@@ -94,4 +73,4 @@ while t < t_end:
 print("Simulation complete. Generating visualization...")
 # --- plotting ---
 plot_full_graph_timeline(euro_graph_list, time_list, title="European Constellation Over Time")
-plot_full_graph_timeline(graph_list, time_list, title="Full Constellation Over Time")
+#plot_full_graph_timeline(graph_list, time_list, title="Full Constellation Over Time")

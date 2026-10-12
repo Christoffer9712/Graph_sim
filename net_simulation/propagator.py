@@ -1,6 +1,4 @@
 # simulation/propagator.py
-import astropy.units as u
-
 class Propagator:
     def __init__(self, satellites, aircrafts):
         self.satellites = satellites
@@ -11,4 +9,4 @@ class Propagator:
             sat.propagate(dt)
 
         for ac in self.aircrafts:
-            ac.propagate(float(dt.to_value(u.s)))
+            ac.propagate(dt)

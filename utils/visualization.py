@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from astropy import units as unit
 from config import LinkType
-from ground_network.nodes import GroundNodeType
 from utils.coordinates import eci_to_latlon, eci_to_latlon_batch
 
 

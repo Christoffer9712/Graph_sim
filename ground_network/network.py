@@ -1,7 +1,6 @@
 import networkx as nx
 from .nodes import GroundNode
-import numpy as np
-from .nodes import GroundNodeType
+import numpy as np 
 from config import MAX_GROUND_LINK_DISTANCE, MAX_GROUND_NEIGHBORS, LinkType
 from utils.utils import haversine_m
 
@@ -32,9 +31,9 @@ def _connect_ground_nodes_as_grid(G: nx.Graph, max_neighbors: int) -> None:
     ground_nodes = [
         (n, d) for n, d in G.nodes(data=True)
         if d['node_type'] in {
-            GroundNodeType.GATEWAY,
-            GroundNodeType.AVIATION,
-            GroundNodeType.UPF,
+            'gateway',
+            'aviation',
+            'upf',
         }
     ]
     if len(ground_nodes) < 2:
@@ -74,7 +73,7 @@ def _add_node(G: nx.Graph, node: GroundNode) -> None:
         node_type=node.node_type,
         lat=node.lat,
         lon=node.lon,
-        dn=node.dn if node.node_type == GroundNodeType.UPF else None
+        dn=node.dn if node.node_type == 'upf' else None
     )
 
 

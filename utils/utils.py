@@ -1,6 +1,5 @@
 import numpy as np
 from functools import lru_cache
-from astropy import units as u
 from shapely.geometry import box
 
 R_EARTH_M = 6_371_000.0  # earth radius in meters
@@ -36,7 +35,7 @@ def latlon_to_ecef(lat_deg: float, lon_deg: float, alt_m: float = 0.0) -> np.nda
 
 def eci_to_altitude(eci_position) -> float:
     """Altitude above Earth's surface (metres) from an ECI position vector."""
-    return float(np.linalg.norm(eci_position / u.m)) - R_EARTH_M
+    return float(np.linalg.norm(eci_position)) - R_EARTH_M
 
 
 def elevation_angle_deg(

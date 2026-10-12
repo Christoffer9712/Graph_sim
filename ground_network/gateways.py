@@ -1,14 +1,11 @@
-from .nodes import GroundNode, GroundNodeType
+from .nodes import GroundNode
 
 _GW_LOCATIONS = [
     # (node_id,               lat,     lon,    description)
     ("GW_NL_Burum",         53.357,   6.198, "Burum, Netherlands"),
     ("GW_IT_SestoCalende",  45.730,   8.630, "Sesto Calende, Italy"),
-    ("GW_SE_Stockholm",     59.440,  18.070, "Stockholm, Sweden"),
-    ("GW_SE_Lulea",         65.580,  22.150, "Luleå, Sweden"),
     ("GW_FI_Helsinki",      60.170,  24.940, "Helsinki, Finland"),
     ("GW_PL_Gdynia",        54.520,  18.530, "Gdynia, Poland"),
-    ("GW_PL_Poznan",        52.400,  16.900, "Poznan, Poland"),
     ("GW_DE_Berlin",        52.520,  13.405, "Berlin, Germany"),
     ("GW_DE_Munich",        48.100,  11.600, "Munich, Germany"),
     ("GW_CZ_Prague",        50.100,  14.400, "Prague, Czech Republic"),
@@ -22,6 +19,6 @@ _GW_LOCATIONS = [
 def get_gateways() -> list[GroundNode]:
     """Return GroundNode objects for all known European Starlink GWs."""
     return [
-        GroundNode(node_id=nid, node_type=GroundNodeType.GATEWAY, lat=lat, lon=lon)
+        GroundNode(node_id=nid, node_type='gateway', lat=lat, lon=lon)
         for nid, lat, lon, _ in _GW_LOCATIONS
     ]

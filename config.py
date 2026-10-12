@@ -1,32 +1,30 @@
 # config.py
 from dataclasses import dataclass
 from enum import Enum
-from astropy import units as u
 
 # -------- Orbit and constellation parameters --------
-T = 1296              # total satellites
-P = 72               # planes
-#T = 100               # total satellites
-#P = 20                # planes
+#T = 1296              # total satellites
+#P = 72               # planes
+T = 360               # total satellites
+P = 20                # planes
 
 F = 45               # phasing parameter; adjacent-plane phase = 360 * F / T degrees
-INC = 53 * u.deg    # inclination
-SATELLITE_ALTITUDE = 550_000 * u.m
+INC = 53             # inclination
+SATELLITE_ALTITUDE = 550_000 #m
 
 # -------- Aircraft parameters --------
 AIRCRRAFT_ALTITUDE = 10_000
 
 # -------- Simulation parameters --------
-TIME_STEP = 10 * u.s
-SIM_DURATION = 200
-TUNNELING_DECISION_INTERVAL = 30
-ALWAYS_UP = False #True  # If True, links never go DOWN (for testing visualization without stochasticity)
+TIME_STEP = 15        #s
+SIM_DURATION = 500
+ALWAYS_UP = True  # If True, links never go DOWN (for testing visualization without stochasticity)
 
 # -------- Link parameters --------
 MAX_ISL_LINK_DISTANCE = 10000_000.0  # Maximum distance for inter-satellite links (1000 km)
 MAX_A2G_LINK_DISTANCE = 200_000.0  # Maximum slant range for aircraft-to-ground-node links (200 km)
-MAX_GROUND_LINK_DISTANCE = 1000_000.0  # Maximum distance for direct ground node links (1000 km)
-FEEDER_LINK_ELEVASION_THRESHOLD_DEG = 20.0  # Minimum elevation angle for feeder links
+MAX_GROUND_LINK_DISTANCE = 1300_000.0  # Maximum distance for direct ground node links (1000 km)
+FEEDER_LINK_ELEVASION_THRESHOLD_DEG = 30.0  # Minimum elevation angle for feeder links
 
 MAX_SAT_PER_GW = 5  # Limit the number of satellites each GW connects to
 MAX_SAT_PER_AC = 3  # Limit the number of satellites each aircraft connects to

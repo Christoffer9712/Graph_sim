@@ -1,7 +1,7 @@
 import numpy as np
 import geopandas as gpd
 
-from .nodes import GroundNode, GroundNodeType
+from .nodes import GroundNode
 from utils.utils import load_europe_land_shape
 
 
@@ -64,7 +64,7 @@ def generate_aviation_nodes(n_target: int = 300) -> list[GroundNode]:
     return [
         GroundNode(
             node_id=f"AV_{i:03d}",
-            node_type=GroundNodeType.AVIATION,
+            node_type='aviation',
             lat=lat, lon=lon,
         )
         for i, (lat, lon) in enumerate(selected)

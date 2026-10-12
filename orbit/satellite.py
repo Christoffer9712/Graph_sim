@@ -2,7 +2,7 @@
 
 from poliastro.twobody import Orbit
 from poliastro.bodies import Earth
-
+from astropy import units as u
 class Satellite:
     def __init__(self, plane, index, orbit: Orbit):
         self.index = index
@@ -10,7 +10,7 @@ class Satellite:
         self.orbit = orbit
 
     def propagate(self, dt):
-        self.orbit = self.orbit.propagate(dt)
+        self.orbit = self.orbit.propagate(dt*u.s)
 
     @property
     def position(self):

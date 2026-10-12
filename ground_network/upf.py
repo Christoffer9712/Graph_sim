@@ -1,4 +1,4 @@
-from .nodes import GroundNode, GroundNodeType
+from .nodes import GroundNode
 
 _UPF_LOCATIONS = [
     # (node_id,                  lat,     lon,   description,              DN)
@@ -17,6 +17,6 @@ _UPF_LOCATIONS = [
 def get_upfs() -> list[GroundNode]:
     """Return GroundNode objects for all UPF locations."""
     return [
-        GroundNode(node_id=nid, node_type=GroundNodeType.UPF, lat=lat, lon=lon, dn=dn)
+        GroundNode(node_id=nid, node_type='upf', lat=lat, lon=lon, dn=dn)
         for nid, lat, lon, _, dn in _UPF_LOCATIONS
     ]

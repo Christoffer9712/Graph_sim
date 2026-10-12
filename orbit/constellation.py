@@ -19,22 +19,22 @@ class WalkerDelta:
         satellites = []
 
         for p in range(self.P):
-            raan = 2 * np.pi * p / self.P * u.rad
+            raan = 2 * np.pi * p / self.P
 
             for s in range(self.S):
                 mean_anomaly = (
                     2 * np.pi * s / self.S +
                     2 * np.pi * self.F * p / self.T
-                ) * u.rad
+                )
 
                 orbit = Orbit.from_classical(
                     Earth,
-                    a=self.altitude + Earth.R,
+                    a=self.altitude * u.m + Earth.R,
                     ecc=0 * u.one,
-                    inc=self.inc,
-                    raan=raan,
+                    inc=self.inc * u.deg,
+                    raan=raan * u.rad,
                     argp=0 * u.deg,
-                    nu=mean_anomaly
+                    nu=mean_anomaly * u.rad
                 )
 
                 satellites.append(Satellite(p, s, orbit))
