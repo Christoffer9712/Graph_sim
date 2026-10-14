@@ -65,7 +65,8 @@ def generate_aviation_nodes(n_target: int = 300) -> list[GroundNode]:
         GroundNode(
             node_id=f"AV_{i:03d}",
             node_type='aviation',
-            lat=lat, lon=lon,
+            position=(lat, lon, 0.0),
+            velocity = (0.0, 0.0)
         )
         for i, (lat, lon) in enumerate(selected)
     ]

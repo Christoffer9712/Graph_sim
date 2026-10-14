@@ -43,11 +43,12 @@ def plot_constellation_timeline(graph_list, time_list, title="Satellite Constell
         coord_cache[t_idx] = {}
 
         positions = np.stack([graph.nodes[node]['position'] for node in graph.nodes])
-        latitudes, longitudes = eci_to_latlon_batch(positions, current_time)
+        lat = [positions[i][0] for i in range(len(positions))]
+        lon = [positions[i][1] for i in range(len(positions))] 
         for idx, node in enumerate(graph.nodes):
-            coord_cache[t_idx][node] = (latitudes[idx], longitudes[idx])
+            coord_cache[t_idx][node] = (lat[idx], lon[idx])
             rows.append({"time": t_idx, "sat": node,
-                         "latitude": latitudes[idx], "longitude": longitudes[idx]})
+                         "latitude": lat[idx], "longitude": lon[idx]})
 
     dataframe = pd.DataFrame(rows)
 
@@ -131,24 +132,26 @@ def plot_full_graph_timeline(full_graph_list, time_list, title="Full Graph Timel
     for t_idx, (graph, current_time) in enumerate(zip(full_graph_list, time_list)):
         coord_cache[t_idx] = {}
         aircraft_nodes = [n for n, d in graph.nodes(data=True) if d.get('node_type') == 'aircraft']
-        satellite_nodes = [n for n, d in graph.nodes(data=True) if 'position' in d and d.get('node_type') != 'aircraft']
-        ground_nodes = [n for n, d in graph.nodes(data=True) if 'lat' in d and 'lon' in d]
-
+        satellite_nodes = [n for n, d in graph.nodes(data=True) if d.get('node_type') == 'satellite']
+        ground_nodes = [n for n, d in graph.nodes(data=True) if d.get('node_type') not in ['satellite', 'aircraft']]
+    
         if satellite_nodes:
             positions = np.stack([graph.nodes[node]['position'] for node in satellite_nodes])
-            latitudes, longitudes = eci_to_latlon_batch(positions, current_time)
+            lat = [positions[i][0] for i in range(len(positions))]
+            lon = [positions[i][1] for i in range(len(positions))] 
             for idx, node in enumerate(satellite_nodes):
-                coord_cache[t_idx][node] = (latitudes[idx], longitudes[idx])
+                coord_cache[t_idx][node] = (lat[idx], lon[idx])
                 rows.append({
                     "time": t_idx,
                     "node": node,
-                    "latitude": latitudes[idx],
-                    "longitude": longitudes[idx],
+                    "latitude": lat[idx],
+                    "longitude": lon[idx],
                     "type": "satellite",
                 })
 
         for node in ground_nodes:
-            lat, lon = graph.nodes[node]['lat'], graph.nodes[node]['lon']
+            pos = graph.nodes[node]['position']
+            lat, lon = pos[0], pos[1]
             coord_cache[t_idx][node] = (lat, lon)
             rows.append({
                 "time": t_idx,
@@ -159,7 +162,8 @@ def plot_full_graph_timeline(full_graph_list, time_list, title="Full Graph Timel
             })
 
         for node in aircraft_nodes:
-            lat, lon = graph.nodes[node]['lat'], graph.nodes[node]['lon']
+            pos = graph.nodes[node]['position']
+            lat, lon = pos[0], pos[1]
             coord_cache[t_idx][node] = (lat, lon)
             rows.append({
                 "time": t_idx,

@@ -13,8 +13,8 @@ EUROPE_BBOX = box(
 
 def haversine_m(latlon_a, latlon_b) -> float:
     """Great-circle distance in metres between two (lat, lon) pairs (degrees) using haversine formula."""
-    lat1, lon1 = np.radians(latlon_a)
-    lat2, lon2 = np.radians(latlon_b)
+    lat1 = np.radians(latlon_a[0]); lon1 = np.radians(latlon_a[1])
+    lat2 = np.radians(latlon_b[0]); lon2 = np.radians(latlon_b[1])
     dlat = lat2 - lat1
     dlon = lon2 - lon1
     a    = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
@@ -69,20 +69,22 @@ def load_europe_land_shape():
     import geopandas as gpd
     from shapely.ops import unary_union
 
-    try:                                         # geopandas < 0.14
-        world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    except AttributeError:                       # geopandas >= 0.14
-        world = gpd.read_file(
-            "https://naturalearth.s3.amazonaws.com/50m_cultural/"
-            "ne_50m_admin_0_countries.zip"
-        )
+    #try:                                         # geopandas < 0.14
+    #    world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+    #except AttributeError:                       # geopandas >= 0.14
+    #    world = gpd.read_file(
+    #        "https://naturalearth.s3.amazonaws.com/50m_cultural/"
+    #        "ne_50m_admin_0_countries.zip"
+    #    )
+
+    world = gpd.read_file(r"C:\Users\chris\Documents\PhD_Python\Graph_sim\data\ne_50m_admin_0_countries.zip")
 
     # Naturalearth name strings — excludes UK, Ireland, Iceland, island territories
     MAINLAND_EUROPE = {
         'Albania', 'Austria', 'Belarus', 'Belgium', 'Bosnia and Herz.',
-        'Bulgaria', 'Croatia', 'Czech Rep.', 'Denmark', 'Estonia',
+        'Bulgaria', 'Croatia', 'Czechia', 'Denmark', 'Estonia',
         'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Italy',
-        'Latvia', 'Lithuania', 'Luxembourg', 'Macedonia', 'Moldova',
+        'Latvia', 'Lithuania', 'Luxembourg', 'North Macedonia', 'Moldova',
         'Montenegro', 'Netherlands', 'Norway', 'Poland', 'Portugal',
         'Romania', 'Serbia', 'Slovakia', 'Slovenia', 'Spain',
         'Sweden', 'Switzerland', 'Ukraine',

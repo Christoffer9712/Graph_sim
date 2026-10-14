@@ -19,6 +19,6 @@ _GW_LOCATIONS = [
 def get_gateways() -> list[GroundNode]:
     """Return GroundNode objects for all known European Starlink GWs."""
     return [
-        GroundNode(node_id=nid, node_type='gateway', lat=lat, lon=lon)
+        GroundNode(node_id=nid, node_type='gateway', position=(lat, lon, 0.0), velocity = (0.0, 0.0))
         for nid, lat, lon, _ in _GW_LOCATIONS
     ]

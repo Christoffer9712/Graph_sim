@@ -16,7 +16,7 @@ SATELLITE_ALTITUDE = 550_000 #m
 AIRCRRAFT_ALTITUDE = 10_000
 
 # -------- Simulation parameters --------
-TIME_STEP = 15        #s
+TIME_STEP = 8        #s
 SIM_DURATION = 500
 ALWAYS_UP = True  # If True, links never go DOWN (for testing visualization without stochasticity)
 

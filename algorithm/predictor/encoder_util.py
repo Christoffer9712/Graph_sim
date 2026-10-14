@@ -1,0 +1,174 @@
+import torch
+from torch_geometric.data import Data
+import networkx as nx
+import numpy as np
+from torch_geometric.utils import to_networkx
+from torch_geometric.data import HeteroData
+from torch_geometric.data import Batch
+import re
+
+NODE_TYPES = ["Aircraft", "Satellite", "Gateway", "Target", "Virtual"]
+_TYPE_IDX = {t: i for i, t in enumerate(NODE_TYPES)}
+
+def snapshot_to_pyg(
+    H,
+    node_attrs=("offset", "range"),      # which attrs to keep
+    edge_attrs=("distance",),
+    include_type_onehot=True,
+    pos_scale=300.0,                     # normalisation constants
+    dist_scale=300.0,
+):
+    """
+    Convert one snapshot to a PyG Data object, selecting only the listed
+    attributes. Node ordering is fixed by sorted node name so that embeddings
+    are comparable across timesteps.
+    """
+    nodes = sorted(H.nodes())
+    idx = {n: i for i, n in enumerate(nodes)}
+
+    # ---- node features ---------------------------------------------------
+    rows = []
+    for n in nodes:
+        d = H.nodes[n]
+        feat = []
+        for a in node_attrs:
+            v = d[a]
+            if a == "offset":                     # (dx, dy) tuple
+                feat.extend([v[0] / pos_scale, v[1] / pos_scale])
+            elif a == "range":
+                feat.append(v / pos_scale)
+            elif isinstance(v, (tuple, list, np.ndarray)):
+                feat.extend(np.asarray(v, dtype=float).ravel())
+            else:
+                feat.append(float(v))
+        if include_type_onehot:
+            oh = [0.0] * len(NODE_TYPES)
+            oh[_TYPE_IDX[d["node_type"]]] = 1.0
+            feat.extend(oh)
+        rows.append(feat)
+    x = torch.tensor(rows, dtype=torch.float32)
+
+    # ---- edges: undirected -> both directions ----------------------------
+    src, dst, eattr = [], [], []
+    for u, v, ed in H.edges(data=True):
+        ef = []
+        for a in edge_attrs:
+            val = ed[a]
+            ef.append(val / dist_scale if a == "distance" else float(val))
+        for a_, b_ in ((u, v), (v, u)):
+            src.append(idx[a_])
+            dst.append(idx[b_])
+            eattr.append(ef)
+
+    if src:
+        edge_index = torch.tensor([src, dst], dtype=torch.long)
+        edge_attr = torch.tensor(eattr, dtype=torch.float32)
+    else:
+        edge_index = torch.empty((2, 0), dtype=torch.long)
+        edge_attr = torch.empty((0, len(edge_attrs)), dtype=torch.float32)
+
+    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    data.node_names = nodes          # keep the mapping for later lookup
+    data.name_to_idx = idx
+    return data
+
+def overlay_dist(data, overlay):
+    dist = 0.0
+    for node_src, node_dst in zip(overlay[:-1], overlay[1:]):
+        src_pos = data.x[data.name_to_idx[node_src]][0:2]
+        dst_pos = data.x[data.name_to_idx[node_dst]][0:2]
+        dist = dist + torch.norm(src_pos - dst_pos)
+    return dist
+
+def _add_overlay_nodes_pyg(data, overlays):
+    x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+    name_to_idx = dict(data.name_to_idx)
+    node_names = list(data.node_names)
+
+    #ovl_feat = [0] #[-1.0, -1.0, -1.0] + [1.0 if t == virtual_type else 0.0 for t in NODE_TYPES]
+
+    virtual, src_virtual, dst_node, src_node, dst_virtual = [], [], [], [], []
+    for i, overlay in enumerate(overlays):
+        ovl_idx = len(virtual) #x.size(0) + len(virtual)
+        name_to_idx[f"OVL-{i}"] = ovl_idx
+        node_names.append(f"OVL-{i}")
+        virtual.append([overlay_dist(data, overlay['overlay_path'])])
+        for node in overlay["overlay_path"]:
+            tgt = name_to_idx[node]
+            src_virtual += [ovl_idx]
+            src_node += [tgt]
+            dst_virtual += [ovl_idx]
+            dst_node += [tgt]
+
+    hetero = HeteroData()
+    hetero['node'].x = x
+    hetero['virtual'].x = torch.tensor(virtual, dtype=torch.float32)
+
+    hetero['node', 'n-v', 'virtual'].edge_index = torch.tensor((src_node, dst_virtual), dtype=torch.long)
+    hetero['virtual', 'v-n', 'node'].edge_index = torch.tensor((src_virtual, dst_node), dtype=torch.long)
+    hetero['node', 'n-n', 'node'].edge_index = edge_index
+    hetero['node', 'n-n', 'node'].edge_attr = edge_attr
+    
+    
+    #out = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    hetero.node_names = node_names
+    hetero.name_to_idx = name_to_idx
+    return hetero
+
+def _add_underlay_path_feature(graph, overlays):
+    """
+    Append one column to node features encoding each node's normalized
+    position along the (single) overlay path. Non-path nodes get -1.
+    Returns the graph (features replaced, not mutated in place).
+    """
+    assert len(overlays) == 1, "single-overlay only"
+    path = overlays[0]["overlay_path"]
+    n_nodes = graph['node'].x.size(0)
+    extra_feature = torch.full((n_nodes, 2), -1.0,
+                    dtype=graph['node'].x.dtype,
+                    device=graph['node'].x.device)
+    map_dict = {'AC': (0,1), 'SA': (1,2), 'GW': (2,3), 'TG': (3,3)}
+
+    for node in graph.name_to_idx:
+        idx = graph.name_to_idx[node]
+        node_type = node[0:2]
+        if node_type == "OV":
+            continue
+        (ovl_src, ovl_dest) = map_dict[node_type]
+
+        pos = graph['node'].x[idx][0:2]
+        ovl_src_pos = graph['node'].x[graph.name_to_idx[path[ovl_src]]][0:2]
+        ovl_dest_pos = graph['node'].x[graph.name_to_idx[path[ovl_dest]]][0:2]
+   
+        dist_to_src = torch.norm(ovl_src_pos - pos)
+        dist_to_dest = torch.norm(ovl_dest_pos - pos)
+        extra_feature[idx, 0] = dist_to_src
+        extra_feature[idx, 1] = dist_to_dest
+
+    graph['node'].x = torch.cat([graph['node'].x, extra_feature], dim=1)
+
+    return graph
+
+class GraphEncoder:
+    def __init__(self, encoder, device="cpu"):
+        self.encoder = encoder
+        self.device = device
+
+    def encode_overlays_pyg_batched(self, data, overlays):
+        graphs = []
+        for overlay in overlays:
+            g = _add_overlay_nodes_pyg(data, [overlay])  # still single-overlay
+            g = _add_underlay_path_feature(g, [overlay]) # assert len==1 still holds
+            graphs.append(g.to(self.device))
+
+        # Disjoint batch: no edges between sub-graphs, so overlay i's virtual
+        # node only attends within overlay i's own topology copy.
+        batch = Batch.from_data_list(graphs)
+
+        encoding = self.encoder.forward(
+            batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict
+        )
+
+        # Every sub-graph had exactly one virtual node, so row i == overlay i.
+        return {overlay['id']: encoding['virtual'][i]
+                for i, overlay in enumerate(overlays)}

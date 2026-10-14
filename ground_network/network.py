@@ -40,7 +40,7 @@ def _connect_ground_nodes_as_grid(G: nx.Graph, max_neighbors: int) -> None:
         return
 
     node_ids = [n for n, _ in ground_nodes]
-    coords   = np.array([[d['lat'], d['lon']] for _, d in ground_nodes])
+    coords   = np.array([d['position'] for _, d in ground_nodes])
 
     pairs = sorted(
         ((haversine_m(coords[i], coords[j]), i, j)
@@ -71,8 +71,8 @@ def _add_node(G: nx.Graph, node: GroundNode) -> None:
     G.add_node(
         node.node_id,
         node_type=node.node_type,
-        lat=node.lat,
-        lon=node.lon,
+        position =node.position,
+        velocity=node.velocity,
         dn=node.dn if node.node_type == 'upf' else None
     )
 

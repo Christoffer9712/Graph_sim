@@ -1,6 +1,6 @@
-import numpy as np
+import math
 import networkx as nx
-
+from config import AIRCRRAFT_ALTITUDE
 
 # 1 degree of arc ≈ 111 km — used to convert speed (km/h) to deg/s.
 # Longitude degrees are shorter at high latitudes, but this approximation
@@ -8,7 +8,7 @@ import networkx as nx
 _KM_PER_DEG = 111.0 # 6381*2*pi/360
 
 class Aircraft:
-    def __init__(self, startPos, destPos, speed_kph: float, node_id: str):
+    def __init__(self, startPos, destPos, speed_kph: float, node_id: str, altitude=AIRCRRAFT_ALTITUDE):
         """
         Parameters
         ----------
@@ -16,17 +16,18 @@ class Aircraft:
         speed_kph         : cruise speed in km/h relative to the ground
         node_id           : graph node identifier string
         """
-        self.startPos = np.array(startPos, dtype=float)
-        self.destPos  = np.array(destPos,  dtype=float)
+        self.startPos = [float(startPos[0]), float(startPos[1])]
+        self.destPos  = [float(destPos[0]), float(destPos[1])]
         self.node_id  = node_id
-        self.position = self.startPos.copy()
+        self.position = self.startPos + [altitude]
         self.arrived  = False
-        
-        direction         = (self.destPos - self.startPos)
-        direction         = direction / np.linalg.norm(direction)
-        speed_deg_per_s   = speed_kph / _KM_PER_DEG / 3600.0
-        self.vel          = speed_deg_per_s * direction
 
+        d_lat             = self.destPos[0] - self.startPos[0]
+        d_lon             = self.destPos[1] - self.startPos[1]
+        norm              = math.hypot(d_lat, d_lon)
+        speed_deg_per_s   = speed_kph / _KM_PER_DEG / 3600.0
+        self.velocity     = (speed_deg_per_s * d_lat / norm, speed_deg_per_s * d_lon / norm)
+        self.altitude       = altitude
         self.graph = nx.Graph()
         self._sync_graph_node()
 
@@ -39,16 +40,19 @@ class Aircraft:
         if self.arrived:
             return
 
-        candidate = self.position + self.vel * dt
+        lat, lon = self.position[0], self.position[1]
+        cand_lat = lat + self.velocity[0] * dt
+        cand_lon = lon + self.velocity[1] * dt
 
-        # Detect overshoot: remaining vector and movement vector point opposite ways
-        remaining = self.destPos - self.position
-        if (np.dot(remaining, candidate - self.position) < 0 or
-                np.linalg.norm(candidate - self.destPos) < 0.01):
-            candidate    = self.destPos.copy()
+        # Detect overshoot: remaining vector (after the move) and movement vector point opposite ways
+        remaining = (self.destPos[0] - cand_lat, self.destPos[1] - cand_lon)
+        movement  = (cand_lat - lat, cand_lon - lon)
+        if (remaining[0] * movement[0] + remaining[1] * movement[1] < 0 or
+                math.hypot(remaining[0], remaining[1]) < 0.01):
+            cand_lat, cand_lon = self.destPos
             self.arrived = True
 
-        self.position = candidate
+        self.position = [cand_lat, cand_lon, self.altitude]
         self._sync_graph_node()
 
     # ── Private Helpers ──────────────────────────────────────────────────────────────
@@ -58,13 +62,13 @@ class Aircraft:
         if self.node_id in self.graph:
             self.graph.nodes[self.node_id].update(
                 node_type='aircraft',
-                position=(lat, lon),
-                vel = (self.vel[0], self.vel[1]) # degrees/s in lat/lon directions
+                position=(lat, lon, self.altitude),
+                velocity = (self.velocity[0], self.velocity[1]) # degrees/s in lat/lon directions
             )
         else:
             self.graph.add_node(
                 self.node_id,
                 node_type='aircraft',
-                position=(lat, lon),
-                vel = (self.vel[0], self.vel[1]) # degrees/s in lat/lon directions
+                position=(lat, lon, self.altitude),
+                velocity = (self.velocity[0], self.velocity[1]) # degrees/s in lat/lon directions
             )
