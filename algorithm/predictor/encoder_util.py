@@ -1,22 +1,21 @@
 import torch
 from torch_geometric.data import Data
-import networkx as nx
 import numpy as np
-from torch_geometric.utils import to_networkx
 from torch_geometric.data import HeteroData
 from torch_geometric.data import Batch
-import re
+from config import MAX_ISL_LINK_DISTANCE
 
-NODE_TYPES = ["Aircraft", "Satellite", "Gateway", "Target", "Virtual"]
+NODE_TYPES = ["aircraft", "satellite", "gateway", "aviation", "upf", "virtual"]
 _TYPE_IDX = {t: i for i, t in enumerate(NODE_TYPES)}
 
 def snapshot_to_pyg(
     H,
-    node_attrs=("offset", "range"),      # which attrs to keep
+    node_attrs=("position", "velocity"),      # which attrs to keep
     edge_attrs=("distance",),
     include_type_onehot=True,
-    pos_scale=300.0,                     # normalisation constants
-    dist_scale=300.0,
+    pos_scale=[50, 50, 600_000],              # Typical Lat/Lon deg, altitude 600 km
+    vel_scale = [0.1, 0.1],                    # Lat/Lon deg/s              
+    dist_scale = MAX_ISL_LINK_DISTANCE/2,
 ):
     """
     Convert one snapshot to a PyG Data object, selecting only the listed
@@ -33,10 +32,10 @@ def snapshot_to_pyg(
         feat = []
         for a in node_attrs:
             v = d[a]
-            if a == "offset":                     # (dx, dy) tuple
-                feat.extend([v[0] / pos_scale, v[1] / pos_scale])
-            elif a == "range":
-                feat.append(v / pos_scale)
+            if a == "position":                     # (dx, dy) tuple
+                feat.extend([v[0] / pos_scale[0], v[1] / pos_scale[1], v[2] / pos_scale[2]])
+            elif a == "velocity":
+                feat.extend([v[0] / vel_scale[0], v[1] / vel_scale[1]])
             elif isinstance(v, (tuple, list, np.ndarray)):
                 feat.extend(np.asarray(v, dtype=float).ravel())
             else:
@@ -85,15 +84,13 @@ def _add_overlay_nodes_pyg(data, overlays):
     name_to_idx = dict(data.name_to_idx)
     node_names = list(data.node_names)
 
-    #ovl_feat = [0] #[-1.0, -1.0, -1.0] + [1.0 if t == virtual_type else 0.0 for t in NODE_TYPES]
-
     virtual, src_virtual, dst_node, src_node, dst_virtual = [], [], [], [], []
     for i, overlay in enumerate(overlays):
         ovl_idx = len(virtual) #x.size(0) + len(virtual)
         name_to_idx[f"OVL-{i}"] = ovl_idx
         node_names.append(f"OVL-{i}")
-        virtual.append([overlay_dist(data, overlay['overlay_path'])])
-        for node in overlay["overlay_path"]:
+        virtual.append([overlay_dist(data, overlay['ovl_path'])])
+        for node in overlay["ovl_path"]:
             tgt = name_to_idx[node]
             src_virtual += [ovl_idx]
             src_node += [tgt]
@@ -114,7 +111,7 @@ def _add_overlay_nodes_pyg(data, overlays):
     hetero.node_names = node_names
     hetero.name_to_idx = name_to_idx
     return hetero
-
+'''
 def _add_underlay_path_feature(graph, overlays):
     """
     Append one column to node features encoding each node's normalized
@@ -122,7 +119,7 @@ def _add_underlay_path_feature(graph, overlays):
     Returns the graph (features replaced, not mutated in place).
     """
     assert len(overlays) == 1, "single-overlay only"
-    path = overlays[0]["overlay_path"]
+    path = overlays[0]["ovl_path"]
     n_nodes = graph['node'].x.size(0)
     extra_feature = torch.full((n_nodes, 2), -1.0,
                     dtype=graph['node'].x.dtype,
@@ -148,7 +145,7 @@ def _add_underlay_path_feature(graph, overlays):
     graph['node'].x = torch.cat([graph['node'].x, extra_feature], dim=1)
 
     return graph
-
+'''
 class GraphEncoder:
     def __init__(self, encoder, device="cpu"):
         self.encoder = encoder
@@ -158,7 +155,7 @@ class GraphEncoder:
         graphs = []
         for overlay in overlays:
             g = _add_overlay_nodes_pyg(data, [overlay])  # still single-overlay
-            g = _add_underlay_path_feature(g, [overlay]) # assert len==1 still holds
+            #g = _add_underlay_path_feature(g, [overlay]) # assert len==1 still holds
             graphs.append(g.to(self.device))
 
         # Disjoint batch: no edges between sub-graphs, so overlay i's virtual
@@ -170,5 +167,5 @@ class GraphEncoder:
         )
 
         # Every sub-graph had exactly one virtual node, so row i == overlay i.
-        return {overlay['id']: encoding['virtual'][i]
+        return {overlay['ovl_id']: encoding['virtual'][i]
                 for i, overlay in enumerate(overlays)}

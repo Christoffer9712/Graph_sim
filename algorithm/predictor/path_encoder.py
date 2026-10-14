@@ -30,10 +30,10 @@ class HeteroGATv2Encoder(nn.Module):
             conv = HeteroConv(
                 {
                     ("node", "n-v", "virtual"): GATv2Conv(d_in, per_head, heads=heads, edge_dim=None,
-                                                concat=not last, add_self_loops=True, dropout=dropout, 
+                                                concat=not last, add_self_loops=False, dropout=dropout, 
                                                 share_weights=False, residual=True),
                     ("virtual", "v-n", "node"): GATv2Conv(d_in, per_head, heads=heads, edge_dim=None,
-                                                concat=not last, add_self_loops=True, dropout=dropout,
+                                                concat=not last, add_self_loops=False, dropout=dropout,
                                                 share_weights=False, residual=True),
                     ("node", "n-n", "node"): GATv2Conv(d_in, per_head, heads=heads, edge_dim=1,
                                                 concat=not last, add_self_loops=True, dropout=dropout, 

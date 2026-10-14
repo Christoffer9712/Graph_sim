@@ -258,4 +258,4 @@ class TopologyModel:
 
     @staticmethod
     def _node_id(sat) -> str:
-        return f'{sat.plane}_{sat.index}'
+        return f'SAT{sat.plane}_{sat.index}'

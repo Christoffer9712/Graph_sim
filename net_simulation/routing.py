@@ -71,10 +71,10 @@ def get_ovls(graph, gw_nodes, source, target, n_ovls):
             for gw in gw_nodes:
                 path = [source, con, gw[0], target]
                 (dist, _) = get_path_distance_delay(graph, path)
-                ovls.append({'overlay_path': path, 'id': f'{source}-{con}-{gw[0]}-{target}', 'dist': dist})
+                ovls.append({'ovl_path': path, 'ovl_id': f'{source}-{con}-{gw[0]}-{target}', 'dist': dist})
         elif graph.nodes[con]['node_type'] == 'aviation':
             path = [source, con, target]
             (dist, _) = get_path_distance_delay(graph, path)
-            ovls.append({'overlay_path': path, 'id': f'{source}-{con}-{target}', 'dist': dist})
+            ovls.append({'ovl_path': path, 'ovl_id': f'{source}-{con}-{target}', 'dist': dist})
 
     return sorted(ovls, key=lambda o: o['dist'])[:n_ovls]
