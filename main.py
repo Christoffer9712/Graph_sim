@@ -21,7 +21,7 @@ if RECALCULATE_DATA:
                  Time("2026-10-13 10:29:00", scale="utc"),
                  Time("2026-10-12 10:15:00", scale="utc"),]
     seed = range(20, 20+len(start_times))
-    generate_data(dataset_path, start_times=start_times, seed=seed, analyse=False, plot=False)
+    generate_data(dataset_path, start_times=start_times, seed=seed, analyse=False, plot=True)
 
 model_path = train(dataset_path, device=DEVICE, transfer_learning_model='predictor_models.pth')
 print('Training complete. Models saved to', model_path)

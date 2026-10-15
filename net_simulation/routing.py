@@ -33,6 +33,11 @@ def get_udl_path_delay(graph, udl):
 
     return queue_delay + prop_delay
 
+def get_udl_prior_delay(graph, udl, mean_delay_by_type):
+    """Propagation delay + mean node delay per type [s] (no current queue state)."""
+    (_, prop_delay) = get_path_distance_delay(graph, udl, calc_delay=True)
+    node_delay = sum(mean_delay_by_type[graph.nodes[node]['node_type']] for node in udl)
+    return prop_delay + node_delay
 
 def delay_weight(u, v, d):
     if d.get('state') != 'UP':

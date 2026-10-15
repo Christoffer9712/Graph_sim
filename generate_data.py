@@ -1,6 +1,6 @@
 import math
-import copy
 import torch
+import numpy as np
 
 from algorithm.predictor.encoder_util import snapshot_to_pyg
 from astropy.time import Time, TimeDelta
@@ -16,6 +16,7 @@ from ground_network import (
 from aircraft.aircraft import *
 from analytics.overlay_analytics import analyse_overlay_delays
 from analytics.queue_delay import test_queue_delay_dynamics
+from net_simulation.routing import get_udl_prior_delay
 
 def generate_data(dataset_path, start_times=[Time("2026-10-08 14:30:00", scale="utc")], seed=[42], analyse=False, plot=False):
     gw_graph      = build_gateway_graph(get_gateways())
@@ -25,19 +26,36 @@ def generate_data(dataset_path, start_times=[Time("2026-10-08 14:30:00", scale="
 
     all_records = []
     history_list = []
-    for gidx in range(len(start_times)):
+    nbr_sims = len(start_times)
+
+    N_AIRCRAFT = 3                      # aircraft per simulation
+    START_LAT_MIN, START_LAT_MAX = 30, 50           # degrees
+    START_LON_MIN, START_LON_MAX = -50, -20
+    END_LAT_MIN, END_LAT_MAX = 30, 50
+    END_LON_MIN, END_LON_MAX = 10, 20
+
+    rng = np.random.default_rng(seed=42)
+    n = N_AIRCRAFT * nbr_sims
+    start_lats = rng.uniform(START_LAT_MIN, START_LAT_MAX, n)
+    start_lons = rng.uniform(START_LON_MIN, START_LON_MAX, n)
+    end_lats   = rng.uniform(END_LAT_MIN, END_LAT_MAX, n)
+    end_lons   = rng.uniform(END_LON_MIN, END_LON_MAX, n)
+    for gidx in range(nbr_sims):
         # --- Initialise Satellite Constellation ---
         sats = WalkerDelta(T, P, F, INC, SATELLITE_ALTITUDE).generate()
 
         # --- Initialise Aircraft ---
-        aircraft1 = Aircraft((51,-50), (41,12), 900, 'AC1') #Aircraft 900 km/h from North Atlantic Ocean to Rome
-        aircraft2 = Aircraft((48,-45), (10,12), 900, 'AC2')
-        aircraft3 = Aircraft((48,-20), (30,0), 900, 'AC3') 
-        aircrafts = [aircraft1, aircraft2, aircraft3]
+        aircrafts = []
+        for i in range(N_AIRCRAFT):
+            k = N_AIRCRAFT * gidx + i   # simulation gidx uses entries k = 3*gidx, 3*gidx+1, 3*gidx+2
+            aircrafts.append(Aircraft((start_lats[k], start_lons[k]),
+                                    (end_lats[k], end_lons[k]),
+                                    900, f'AC{i+1}'))
 
         # --- Initialise Dynamic Network ---
         current_time = start_times[gidx]
         network = DynamicNetwork(sats, P, math.floor(T / P), F, current_time, static_ground, aircrafts, seed=seed[gidx])
+        mean_delay_by_type = network.queues.mean_delay_by_type()
 
         # Simulation parameters
         t = 0.0
@@ -77,9 +95,10 @@ def generate_data(dataset_path, start_times=[Time("2026-10-08 14:30:00", scale="
             for ovl in ovls:
                 udl = network.get_udl_path(ovl['ovl_path'])
                 if udl:
-                    delay_ms = network.get_udl_path_delay(udl, current_time)*1000 
+                    delay_ms = network.get_udl_path_delay(udl, current_time)*1000
+                    prior_delay_ms = get_udl_prior_delay(network.graph, udl, mean_delay_by_type) * 1000
                     overlay_records.append({'t': t, 'ovl_id': ovl['ovl_id'], 'ovl_path': ovl['ovl_path'],
-                                            'udl': udl, 'delay_ms': delay_ms})
+                                            'udl': udl, 'delay_ms': delay_ms, 'prior_delay_ms': prior_delay_ms})
                     #print(f'udl {udl} -- {network.get_udl_path_delay(udl, current_time)*1000} ms delay at time {t}')
             all_records += overlay_records
             history[tstep]['ovls'] = overlay_records

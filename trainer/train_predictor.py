@@ -16,10 +16,6 @@ from torch_geometric.data import Data
 from .dataset import PredictorDataset
 from algorithm.predictor.f_topo import f_topo
 
-INCLUDE_MEAS = True
-REMOVE_SELF_MEAS = True
-REMOVE_SELF_MEAS_PERC = 0.9
-
 GRAD_CLIP = 1.0
 
 def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.25e-3,
@@ -34,7 +30,7 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.25e-
     os.makedirs(model_dir, exist_ok=True)
 
     dataset = PredictorDataset(dataset_path)
-    # Loss weights: c_lambda, c_delta
+    # Loss weights: c_delta
     c_delta = 1.0
 
     nbr_sims = dataset.get_nbr_of_sims()
@@ -80,6 +76,7 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.25e-
             {'params': encoder.parameters(), 'lr': lr},
             {'params': ftopo.parameters(), 'lr': lr},
         ])
+        mean_delay = ckpt['mean_delay'] # Re-use the same delay as for previous training
         print(f'Loaded model from {transfer_learning_model}')
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -108,7 +105,7 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.25e-
 
             for f_ovl in eligible:
                 tgt = torch.tensor(f_ovl['delay_ms'], dtype=torch.float, device=device)
-                tgt = (tgt - mean_delay.sum()) / (std_dev_delay + 1e-8)
+                tgt = (tgt - mean_delay) / (std_dev_delay + 1e-8)
 
                 ovl_id = f_ovl['ovl_id']
                 enc = h_enc[(gidx, ovl_id, t + m)]

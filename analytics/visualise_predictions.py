@@ -236,6 +236,7 @@ def main():
         "topo (GAT)": make_topo_predictor(topo_model),
         "train mean": make_mean_predictor(topo_model["mean_delay"]),
         "persistence": persistence_predictor,
+#        "oracle prior (path+mean_node_delay)": make_oracle_predictor
     }
 
     rows = run_models(history, models)

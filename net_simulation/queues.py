@@ -92,6 +92,14 @@ class QueueModel:
             # Delay from actual occupancy via Little's law: W = L / lambda
             d["queue_delay"] = d["queue_len"] / max(d["load"], 1e-6)
 
+    def mean_delay_by_type(self):
+        """Expected M/M/1 delay [s] per node type, averaged over the random mu and base_rho draws."""
+        lo, hi = self.params.service_rate_range
+        a, b = self.params.base_load_range
+        e_inv_service = math.log(hi / lo) / (hi - lo)          # E[1 / U(lo, hi)]
+        e_inv_idle = math.log((1 - a) / (1 - b)) / (b - a)     # E[1 / (1 - U(a, b))]
+        return {node_type: e_inv_service * e_inv_idle / mult
+                for node_type, mult in self.type_mu.items()}
     # ---Helpers---
     @staticmethod
     def _equilibrium_len(rho, rho_max):
