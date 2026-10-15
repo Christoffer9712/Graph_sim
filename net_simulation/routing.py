@@ -45,8 +45,32 @@ def delay_weight(u, v, d):
     #c = C_FIBER if d['link_type'] == LinkType.GROUND_GRID else C_VACUUM
     return d['distance']# / c
 
+def path_is_valid(graph, path):
+    """True if every link of the path still exists and is up."""
+    for u, v in zip(path[:-1], path[1:]):
+        edge = graph.get_edge_data(u, v)
+        if edge is None or edge.get('state') != 'UP':
+            return False
+    return True
 
-def get_udl_path(graph, ovl):
+
+def get_udl_hysteresis_path(graph, ovl, udl_prev=None, threshhold_perc=10.0):
+    """Keep the previous underlay path unless the shortest path is more than
+    threshhold_perc % faster (propagation delay), or the previous path is broken."""
+    udl_sp = get_udl_shortest_path(graph, ovl)
+
+    if not udl_prev or udl_prev == udl_sp or not path_is_valid(graph, udl_prev):
+        return udl_sp
+
+    (_, old_delay) = get_path_distance_delay(graph, udl_prev, calc_delay=True)
+    (_, sp_delay) = get_path_distance_delay(graph, udl_sp, calc_delay=True)
+    if sp_delay < (1 - threshhold_perc / 100) * old_delay:
+        return udl_sp
+
+    print(f'SP_delay = {sp_delay}, old_delay = {old_delay}')
+    return udl_prev
+
+def get_udl_shortest_path(graph, ovl):
     udl_path = []
     for node1, node2 in zip(ovl[:-1], ovl[1:]):
         n1_type = graph.nodes[node1]['node_type']

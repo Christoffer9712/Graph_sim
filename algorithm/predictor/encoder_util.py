@@ -5,7 +5,7 @@ from torch_geometric.data import HeteroData
 from torch_geometric.data import Batch
 from config import MAX_ISL_LINK_DISTANCE
 
-NODE_TYPES = ["aircraft", "satellite", "gateway", "aviation", "upf", "virtual"]
+NODE_TYPES = ["aircraft", "satellite", "gateway", "aviation", "upf"]
 _TYPE_IDX = {t: i for i, t in enumerate(NODE_TYPES)}
 
 def snapshot_to_pyg(
@@ -89,7 +89,7 @@ def _add_overlay_nodes_pyg(data, overlays):
         ovl_idx = len(virtual) #x.size(0) + len(virtual)
         name_to_idx[f"OVL-{i}"] = ovl_idx
         node_names.append(f"OVL-{i}")
-        virtual.append([overlay_dist(data, overlay['ovl_path'])])
+        virtual.append([0])#[overlay_dist(data, overlay['ovl_path'])])
         for node in overlay["ovl_path"]:
             tgt = name_to_idx[node]
             src_virtual += [ovl_idx]

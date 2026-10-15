@@ -27,6 +27,7 @@ import math
 
 import numpy as np
 import torch
+import networkx as nx
 import matplotlib.pyplot as plt
 from astropy.time import Time
 from torch_geometric.data import Data
@@ -35,9 +36,10 @@ from algorithm.predictor.path_encoder import HeteroGATv2Encoder
 from algorithm.predictor.encoder_util import GraphEncoder
 from algorithm.predictor.f_topo import f_topo
 from generate_data import generate_data     # <-- adjust to where your generate_data() lives
+from net_simulation.routing import get_path_distance_delay
 
 # Must be the same values as in train.py, otherwise the saved weights don't fit
-ENCODER_SETTINGS = dict(node_in=11, virtual_in=1, hidden_dim=128, out_dim=64,
+ENCODER_SETTINGS = dict(node_in=10, virtual_in=1, hidden_dim=128, out_dim=64,
                         heads=2, n_layers=3, dropout=0.1)
 FTOPO_SETTINGS = dict(in_dim=64, hidden_dim=64, dropout=0.0)
 
@@ -123,6 +125,8 @@ def persistence_predictor(history, step, ovls):
                 break
     return predictions
 
+def analytic_prior_predictor(history, step, ovls):
+    return {ovl['ovl_id']: ovl['prior_delay_ms'] for ovl in ovls}
 
 # =============================================================================
 # 4. Running all models
@@ -236,7 +240,7 @@ def main():
         "topo (GAT)": make_topo_predictor(topo_model),
         "train mean": make_mean_predictor(topo_model["mean_delay"]),
         "persistence": persistence_predictor,
-#        "oracle prior (path+mean_node_delay)": make_oracle_predictor
+        "oracle prior": analytic_prior_predictor
     }
 
     rows = run_models(history, models)

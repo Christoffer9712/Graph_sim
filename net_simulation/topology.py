@@ -4,7 +4,7 @@ Nodes, positions and links of the network graph.
 Reads the satellite/aircraft positions set by the Propagator and decides
 which links exist. Never touches queues or routing.
 """
-from utils.network_link_characteristics import markov_step
+from net_simulation.network_link_characteristics import markov_step
 from utils.utils import haversine_m
 from config import (
     FEEDER_LINK_ELEVASION_THRESHOLD_DEG, MAX_ISL_LINK_DISTANCE, SATELLITE_ALTITUDE, LINK_PARAMS, MAX_SAT_PER_GW, MAX_SAT_PER_AC,
@@ -93,7 +93,9 @@ class TopologyModel:
         return sat_euro_ids
 
     def _build_feeder_edges(self, sat_euro_ids: set[str]):
-        """Connect gateway nodes to nearby European satellites."""
+        """Connect gateway nodes to nearby European satellites.
+           Follows hysteresis, keep FL until out of reach."""
+
         for gw_id, gw_data in self.gw_nodes:
             connected = {
                 s for s, _, d in self.graph.in_edges(gw_id, data=True)

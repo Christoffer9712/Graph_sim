@@ -92,8 +92,18 @@ def generate_data(dataset_path, start_times=[Time("2026-10-08 14:30:00", scale="
             ovls += network.get_ovls('AC3', 'UPF_DE_Frankfurt', 3, current_time)  
             print(f'Simulation {gidx} -- Time {t}')
             overlay_records = []
+
+            prev_udls = {}
+            if tstep > 0:
+                prev_udls = {o['ovl_id']: o['udl'] for o in history[tstep - 1]['ovls']}
+
             for ovl in ovls:
-                udl = network.get_udl_path(ovl['ovl_path'])
+                udl = network.get_udl_shortest_path(ovl['ovl_path'])
+                # Below, updates underlay routing only if the new udl path is significantly better
+                # Probably not the most realistic measure as routing is typically distributed.
+                #udl = network.get_udl_hysteresis_path(ovl['ovl_path'],
+                #                          udl_prev=prev_udls.get(ovl['ovl_id']),
+                #                          threshhold_perc=50.0)
                 if udl:
                     delay_ms = network.get_udl_path_delay(udl, current_time)*1000
                     prior_delay_ms = get_udl_prior_delay(network.graph, udl, mean_delay_by_type) * 1000

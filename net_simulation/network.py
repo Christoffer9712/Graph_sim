@@ -44,8 +44,13 @@ class DynamicNetwork:
     def get_ovls(self, source, target, n_ovls, time=None):
         return routing.get_ovls(self.graph, self.topology.gw_nodes, source, target, n_ovls)
 
-    def get_udl_path(self, ovl):
-        return routing.get_udl_path(self.graph, ovl)
+    def get_udl_shortest_path(self, ovl):
+        return routing.get_udl_shortest_path(self.graph, ovl)
+
+    def get_udl_hysteresis_path(self, ovl, udl_prev=None, threshhold_perc=10.0):
+            return routing.get_udl_hysteresis_path(self.graph, ovl, 
+                                                   udl_prev=udl_prev, 
+                                                   threshhold_perc=threshhold_perc)
 
     def get_udl_path_delay(self, udl, time=None):
         return routing.get_udl_path_delay(self.graph, udl)

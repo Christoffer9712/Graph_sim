@@ -18,8 +18,8 @@ from algorithm.predictor.f_topo import f_topo
 
 GRAD_CLIP = 1.0
 
-def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.25e-3,
-          device='cpu', min_delta=1e-4, patience=6, transfer_learning_model=None):
+def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e-3,
+          device='cpu', min_delta=1e-4, patience=10, transfer_learning_model=None):
 
     if dataset_path is None:
         dataset_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'predictor_dataset.pt')
@@ -58,7 +58,7 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.25e-
     #print(f"Baseline (predict-mean) test  = {baselines(test_t, [dataset[-1]], 1, mean_delay.sum(), std_dev_delay, c_delta)}")
 
     TOPO_DIM = 64
-    encoder = HeteroGATv2Encoder(node_in=11, virtual_in=1, hidden_dim=128, out_dim=TOPO_DIM, heads=2, n_layers=3, dropout=0.1).to(device)
+    encoder = HeteroGATv2Encoder(node_in=10, virtual_in=1, hidden_dim=128, out_dim=TOPO_DIM, heads=2, n_layers=3, dropout=0.1).to(device)
     graph_encoder = GraphEncoder(encoder)
 
     #fcov = f_cov(in_dim=TOPO_DIM, dropout=0.0).to(device)
