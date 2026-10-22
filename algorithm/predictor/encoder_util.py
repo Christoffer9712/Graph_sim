@@ -111,41 +111,7 @@ def _add_overlay_nodes_pyg(data, overlays):
     hetero.node_names = node_names
     hetero.name_to_idx = name_to_idx
     return hetero
-'''
-def _add_underlay_path_feature(graph, overlays):
-    """
-    Append one column to node features encoding each node's normalized
-    position along the (single) overlay path. Non-path nodes get -1.
-    Returns the graph (features replaced, not mutated in place).
-    """
-    assert len(overlays) == 1, "single-overlay only"
-    path = overlays[0]["ovl_path"]
-    n_nodes = graph['node'].x.size(0)
-    extra_feature = torch.full((n_nodes, 2), -1.0,
-                    dtype=graph['node'].x.dtype,
-                    device=graph['node'].x.device)
-    map_dict = {'AC': (0,1), 'SA': (1,2), 'GW': (2,3), 'TG': (3,3)}
 
-    for node in graph.name_to_idx:
-        idx = graph.name_to_idx[node]
-        node_type = node[0:2]
-        if node_type == "OV":
-            continue
-        (ovl_src, ovl_dest) = map_dict[node_type]
-
-        pos = graph['node'].x[idx][0:2]
-        ovl_src_pos = graph['node'].x[graph.name_to_idx[path[ovl_src]]][0:2]
-        ovl_dest_pos = graph['node'].x[graph.name_to_idx[path[ovl_dest]]][0:2]
-   
-        dist_to_src = torch.norm(ovl_src_pos - pos)
-        dist_to_dest = torch.norm(ovl_dest_pos - pos)
-        extra_feature[idx, 0] = dist_to_src
-        extra_feature[idx, 1] = dist_to_dest
-
-    graph['node'].x = torch.cat([graph['node'].x, extra_feature], dim=1)
-
-    return graph
-'''
 class GraphEncoder:
     def __init__(self, encoder, device="cpu"):
         self.encoder = encoder
@@ -155,7 +121,6 @@ class GraphEncoder:
         graphs = []
         for overlay in overlays:
             g = _add_overlay_nodes_pyg(data, [overlay])  # still single-overlay
-            #g = _add_underlay_path_feature(g, [overlay]) # assert len==1 still holds
             graphs.append(g.to(self.device))
 
         # Disjoint batch: no edges between sub-graphs, so overlay i's virtual

@@ -6,19 +6,23 @@ models/predictor_predictor.pth (two modules).
 """
 import os
 import torch
-import statistics
 import copy
 import numpy as np
+import random
 
 from algorithm.predictor.path_encoder import HeteroGATv2Encoder
 from algorithm.predictor.encoder_util import GraphEncoder
 from torch_geometric.data import Data
 from .dataset import PredictorDataset
 from algorithm.predictor.f_topo import f_topo
+from algorithm.predictor.f_cov import f_cov
 
 GRAD_CLIP = 1.0
+INCLUDE_MEAS = True
+REMOVE_SELF_MEAS = True
+REMOVE_SELF_MEAS_PERC = 1.0
 
-def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e-3,
+def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.5e-3,
           device='cpu', min_delta=1e-4, patience=10, transfer_learning_model=None):
 
     if dataset_path is None:
@@ -58,37 +62,80 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e
     #print(f"Baseline (predict-mean) test  = {baselines(test_t, [dataset[-1]], 1, mean_delay.sum(), std_dev_delay, c_delta)}")
 
     TOPO_DIM = 64
-    encoder = HeteroGATv2Encoder(node_in=10, virtual_in=1, hidden_dim=128, out_dim=TOPO_DIM, heads=2, n_layers=3, dropout=0.1).to(device)
+    encoder = HeteroGATv2Encoder(node_in=10, virtual_in=1, hidden_dim=128, out_dim=TOPO_DIM, heads=2, n_layers=3, dropout=0.0).to(device)
     graph_encoder = GraphEncoder(encoder)
 
-    #fcov = f_cov(in_dim=TOPO_DIM, dropout=0.0).to(device)
+    fcov = f_cov(in_dim=TOPO_DIM, dropout=0.0).to(device)
     ftopo = f_topo(in_dim=TOPO_DIM, hidden_dim=64, dropout=0.0).to(device)
 
-    opt = torch.optim.Adam(list(encoder.parameters()) + list(ftopo.parameters()), lr=lr)
+    opt = torch.optim.Adam(list(encoder.parameters()) + list(ftopo.parameters()) + list(fcov.parameters()), lr=lr)
     
     if transfer_learning_model:
         model_path = os.path.join(model_dir, transfer_learning_model)
         ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
         ftopo.load_state_dict(ckpt['ftopo_state'])
         encoder.load_state_dict(ckpt['encoder_state'])
+        fcov.load_state_dict(ckpt['fcov_state'])
         print(f"Loaded model at {model_path}")
         opt = torch.optim.Adam([
-            {'params': encoder.parameters(), 'lr': lr},
-            {'params': ftopo.parameters(), 'lr': lr},
+            {'params': encoder.parameters(), 'lr': 0.2*lr},
+            {'params': ftopo.parameters(), 'lr': 0.2*lr},
+            {'params': fcov.parameters(), 'lr': lr}
         ])
-        mean_delay = ckpt['mean_delay'] # Re-use the same delay as for previous training
+        mean_delay, std_dev_delay = ckpt['mean_delay'], ckpt['std_dev_delay']
         print(f'Loaded model from {transfer_learning_model}')
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             opt, mode='min', factor=0.5, patience=3)
 
-    
+    name_vocab, id_vocab = {}, {}
+    def ovl_keys(ovl):
+        wps = [name_vocab.setdefault(nm, len(name_vocab)) for nm in ovl['ovl_path']][:fcov.n_wp]
+        wps += [-1] * (fcov.n_wp - len(wps))
+        return torch.tensor([id_vocab.setdefault(ovl['ovl_id'], len(id_vocab))] + wps, dtype=torch.long, device=device)
+
     def run_t(t, gidx, data, h_enc, h_topo):
         curr_overlay = data[(gidx,t)]['ovls']
         curr_overlay_ids = [ovl['ovl_id'] for ovl in curr_overlay]
 
         loss = torch.zeros((), device=device)
         count = 0
+
+        H_hist = []
+        Meas_hist = []
+        Elapsed = []
+        Hist_ids = []
+        Topo_hist = []
+        Keys_hist = []
+        if INCLUDE_MEAS:
+            for i in range(0, Delta):
+                d = dataset[gidx][t - i]
+                hist_overlay = d['ovls']
+                # encode the whole graph for time (t-i) ONCE, for all overlays
+                missing = [ovl for ovl in hist_overlay if (gidx, ovl['ovl_id'], t - i) not in h_enc]
+                if missing:
+                    enc = graph_encoder.encode_overlays_pyg_batched(data[(gidx, t - i)], missing)
+                    topo = ftopo(torch.stack([enc[i] for i in list(enc.keys())]))
+                    for idx, entry in enumerate(enc.keys()):
+                        h_enc[(gidx, entry, t - i)] = enc[entry]
+                        h_topo[(gidx, entry, t - i)] = topo[idx]
+                        
+                for ovl in hist_overlay:
+                    H_hist.append(h_enc[(gidx, ovl['ovl_id'], t - i)])
+                    Meas_hist.append(torch.tensor(ovl['delay_ms'], dtype=torch.float, device=device))
+                    Topo_hist.append(h_topo[(gidx, ovl['ovl_id'], t-i)])
+                        
+                    Elapsed.append(float(i))
+                    Hist_ids.append((ovl['ovl_id'], t - i))
+                    Keys_hist.append(ovl_keys(ovl))
+
+            if len(H_hist) > 0:  # Can be 0 if there are no overlays at given time
+                H_hist = torch.stack(H_hist)
+                Meas_hist = torch.stack(Meas_hist)
+                Meas_hist = torch.stack([(Meas_hist - mean_delay) / (std_dev_delay + 1e-8)], dim=1)
+                Elapsed = torch.tensor(Elapsed, device=device).unsqueeze(1)
+                Topo_hist = torch.stack(Topo_hist)
+                Keys_hist = torch.stack(Keys_hist)
 
         for m in range(1, M+1):         
             fut_overlay = data[(gidx, t + m)]['ovls']
@@ -112,13 +159,48 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e
                 out_topo = ftopo(enc)
                 h_topo[(gidx, ovl_id, t+m)] = out_topo
 
-                z0 = out_topo - tgt
+                if INCLUDE_MEAS:
+                    mask = torch.ones((len(H_hist)), dtype=torch.bool, device=device).detach()
+                    if REMOVE_SELF_MEAS:
+                        for d in range(Delta):  #Don't use previous measurements from the same overlay
+                            if (f_ovl['ovl_id'], t-d) in Hist_ids:
+                                if random.random() < REMOVE_SELF_MEAS_PERC:
+                                    idx = Hist_ids.index((f_ovl['ovl_id'], t-d))
+                                    mask[idx] = False
+
+                    Topo_hist_tmp = Topo_hist[mask]
+                    Elapsed_tmp = Elapsed[mask]
+                    H_hist_tmp = H_hist[mask]
+                    Meas_hist_tmp = Meas_hist[mask]
+                    Keys_hist_tmp = Keys_hist[mask]
+
+                    # Only use shared overlay information
+                    #C = (fcov(H_hist_tmp, Elapsed_tmp + m, keys_hist=Keys_hist_tmp, include_phi=False, add_noise=False)).reshape(H_hist_tmp.size(0), H_hist_tmp.size(0))
+                    #g = (fcov(H_hist_tmp, Elapsed_tmp + m, h_pred=enc,
+                    #          keys_hist=Keys_hist_tmp, keys_pred=ovl_keys(f_ovl), include_phi=False, add_noise=False)).reshape(H_hist_tmp.size(0), 1)
+                    
+                    # Only use the phi function to estimate covariance based on encodings
+                    C = (fcov(H_hist_tmp, Elapsed_tmp + m, include_phi=True, add_noise=False)).reshape(H_hist_tmp.size(0), H_hist_tmp.size(0))
+                    g = (fcov(H_hist_tmp, Elapsed_tmp + m, h_pred=enc, include_phi=True, add_noise=False)).reshape(H_hist_tmp.size(0), 1)
+                    
+                    
+                    hat_z = Meas_hist_tmp[:,0] - Topo_hist_tmp[:,0]
+                    R = 0.001*torch.eye(C.shape[0], dtype=C.dtype, device=C.device)
+                    #tmp = torch.linalg.cond(C+R)
+                    #if tmp > 10**5:
+                    #    print(f'C+R might be ill-conditioned! Cond = {tmp}')
+                    
+                    out_meas = g.T @ torch.linalg.solve(C+R, hat_z)
+                else:
+                    out_meas = torch.zeros((1), dtype=torch.float, device=device)
+
+                out = out_topo + out_meas
+                z0 = out - tgt
                 loss = loss + (c_delta * z0 ** 2)
 
                 count += 1
 
         return loss, count, h_enc, h_topo
-
     
     batch_size = batch_size/(nbr_sims-1) #For each step, train over all sims
 
@@ -135,7 +217,7 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e
 
     for ep in range(epochs):
         # ---- train ----
-        encoder.train(); ftopo.train()
+        encoder.train(); ftopo.train(); fcov.train()
         train_loss = 0.0
         batch_sample = 1
         loss_batch = torch.zeros((), device=device)
@@ -176,7 +258,7 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e
         train_loss = train_loss / (len(train_t))
 
         # ---- validate ----
-        encoder.eval(); ftopo.eval()
+        encoder.eval(); ftopo.eval(); fcov.eval()
         val_loss = 0.0
         h_enc = {}
         h_topo = {}
@@ -200,6 +282,7 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e
             best_state = {
                 'encoder_state': copy.deepcopy(encoder.state_dict()),
                 'ftopo_state': copy.deepcopy(ftopo.state_dict()),
+                'fcov_state': copy.deepcopy(fcov.state_dict()),
             }
         else:
             epochs_no_improve += 1
@@ -219,11 +302,13 @@ def train(dataset_path=None, model_dir=None, epochs=50, batch_size=32, lr=0.125e
     if best_state is not None:
         encoder.load_state_dict(best_state['encoder_state'])
         ftopo.load_state_dict(best_state['ftopo_state'])
+        fcov.load_state_dict(best_state['fcov_state'])
 
     # Save models
     model_path = os.path.join(model_dir, 'predictor_models.pth')
     torch.save({'encoder_state': encoder.state_dict(),
                 'ftopo_state': ftopo.state_dict(),
+                'fcov_state': fcov.state_dict(),
                 'mean_delay': mean_delay, 'std_dev_delay': std_dev_delay},
                model_path)
     print('Saved trained models to', model_path)

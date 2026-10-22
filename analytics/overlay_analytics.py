@@ -27,39 +27,55 @@ def analyse_overlay_delays(records, dt, min_samples=20, max_lag_steps=30):
     """Turn the raw measurements into time series and make all plots."""
 
     # 1. One delay time series per overlay (NaN where not measured)
-    times, delays = build_delay_series(records, dt)
-    delays = keep_frequent_overlays(delays, min_samples)
-    if not delays:
+    times, e2e_delays, queue_delays, prior_delays = build_delay_series(records, dt)
+    e2e_delays = keep_frequent_overlays(e2e_delays, min_samples)
+    queue_delays = keep_frequent_overlays(queue_delays, min_samples)
+    prior_delays = keep_frequent_overlays(prior_delays, min_samples)
+    if not e2e_delays:
         print("Not enough overlay measurements for statistics "
               "(lower min_samples or extend SIM_DURATION).")
         return
 
     # 2. Replace long overlay paths with short labels O0, O1, ... (legend is printed)
-    delays = rename_to_short_labels(delays)
-
-    # 3. Change in delay from one step to the next. This removes the slow trend
-    #    that all overlays share (the aircraft moving), which would otherwise
-    #    make every overlay look correlated with every other one.
-    delay_changes = {name: change_per_step(d) for name, d in delays.items()}
-
+    e2e_delays = rename_to_short_labels(e2e_delays)
+    queue_delays = rename_to_short_labels(queue_delays)
+    prior_delays = rename_to_short_labels(prior_delays)
+    
+    prop_delays = {ovl: e2e_delays[ovl] - queue_delays[ovl]
+                    for ovl in e2e_delays.keys()}
+    resid_delays = {ovl: e2e_delays[ovl] - prior_delays[ovl]
+                        for ovl in e2e_delays.keys()}
     # 4. Pick which overlay to study in detail, and how far ahead to look.
     #    Beyond ~1/4 of the series there are too few overlapping samples.
-    target = overlay_with_most_samples(delays)
+    target = overlay_with_most_samples(e2e_delays)
     max_lag_steps = max(1, min(max_lag_steps, len(times) // 4))
 
     # 5. Plots
-    plot_delays_over_time(times, delays)
+    plot_delays_over_time(times, e2e_delays, title="E2E overlay delay over time")
+    plot_delays_over_time(times, queue_delays, title="Queue overlay delay over time")
+    plot_delays_over_time(times, prop_delays, title="Propagation overlay delay over time")
+    plot_delays_over_time(times, resid_delays, title="Residual overlay delay over time")
 
-    plot_heatmap(delays, lag=0, kind="cor",
-                 title="Correlation of delay, same time step")
+    plot_heatmap(e2e_delays, lag=0, kind="cor",
+                 title="Correlation of E2E delay, same time step")
 
-    plot_heatmap(delays, lag=1, kind="cor",
-                     title="Correlation of delay [ms²], lag 1")
+    plot_heatmap(queue_delays, lag=0, kind="cor",
+                 title="Correlation of queue delay, same time step")
+
+    plot_heatmap(prop_delays, lag=0, kind="cor",
+                     title="Correlation of propagation delay, same time step")
+
+    plot_heatmap(resid_delays, lag=0, kind="cor",
+                         title="Correlation of residual delay, same time step")
+
+    plot_heatmap(e2e_delays, lag=1, kind="cor",
+                     title="Correlation of E2E delay [ms²], lag 1")
+
+    plot_heatmap(queue_delays, lag=1, kind="cor",
+                         title="Correlation of queue delay [ms²], lag 1")
     
     
-    plot_self_correlation(delays[target], target, max_lag_steps, dt)
-
-    plot_prediction_curves(delay_changes, target, max_lag_steps, dt)
+    plot_self_correlation(e2e_delays[target], target, max_lag_steps, dt)
 
     plt.show()
 
@@ -82,16 +98,22 @@ def build_delay_series(records, dt):
     n_steps = round(max(r["t"] for r in records) / dt) + 1
     times = np.arange(n_steps) * dt
 
-    delays = {}
+    e2e_delays = {}
+    queue_delays = {}
+    prior_delays = {}
     for r in records:
         name = " → ".join(str(node) for node in r["overlay"])
         step = round(r["t"] / dt)
 
-        if name not in delays:
-            delays[name] = np.full(n_steps, np.nan)   # start with "not measured"
-        delays[name][step] = r["delay_ms"]
+        if name not in e2e_delays:
+            e2e_delays[name] = np.full(n_steps, np.nan)   # start with "not measured"
+            queue_delays[name] = np.full(n_steps, np.nan) 
+            prior_delays[name] = np.full(n_steps, np.nan)   # start with "not measured"
+        e2e_delays[name][step] = r["delay_ms"]
+        queue_delays[name][step] = r["queue_delay_ms"]
+        prior_delays[name][step] = r["prior_delay_ms"]
 
-    return times, delays
+    return times, e2e_delays, queue_delays, prior_delays
 
 
 def count_samples(x):
@@ -158,14 +180,14 @@ def lagged_statistic(x, y, lag, kind="corr"):
 # Plots
 # =============================================================================
 
-def plot_delays_over_time(times, delays):
+def plot_delays_over_time(times, delays, title):
     """Raw delay of every overlay. Gaps = overlay not measured at that step."""
     fig, ax = plt.subplots(figsize=(9, 4))
     for name, d in delays.items():
         ax.plot(times, d, marker=".", label=name)
     ax.set_xlabel("t [s]")
     ax.set_ylabel("delay [ms]")
-    ax.set_title("Overlay delay over time")
+    ax.set_title(title)
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()

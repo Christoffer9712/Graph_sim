@@ -87,9 +87,9 @@ def generate_data(dataset_path, start_times=[Time("2026-10-08 14:30:00", scale="
             history[tstep]['name_to_idx'] = data.name_to_idx
 
             ovls = []
-            ovls += network.get_ovls('AC1', 'UPF_DE_Frankfurt',3, current_time)
-            ovls += network.get_ovls('AC2', 'UPF_DE_Frankfurt', 3, current_time) 
-            ovls += network.get_ovls('AC3', 'UPF_DE_Frankfurt', 3, current_time)  
+            targets = ['UPF_DE_Frankfurt', 'UPF_NL_Amsterdam']
+            for (idx, ac) in enumerate(aircrafts):
+                ovls += network.get_ovls(ac.node_id, 'UPF_DE_Frankfurt', 3, current_time)
             print(f'Simulation {gidx} -- Time {t}')
             overlay_records = []
 
@@ -105,10 +105,10 @@ def generate_data(dataset_path, start_times=[Time("2026-10-08 14:30:00", scale="
                 #                          udl_prev=prev_udls.get(ovl['ovl_id']),
                 #                          threshhold_perc=50.0)
                 if udl:
-                    delay_ms = network.get_udl_path_delay(udl, current_time)*1000
+                    (delay_s, queue_delay_s) = network.get_udl_path_delay(udl, current_time)
                     prior_delay_ms = get_udl_prior_delay(network.graph, udl, mean_delay_by_type) * 1000
                     overlay_records.append({'t': t, 'ovl_id': ovl['ovl_id'], 'ovl_path': ovl['ovl_path'],
-                                            'udl': udl, 'delay_ms': delay_ms, 'prior_delay_ms': prior_delay_ms})
+                                            'udl': udl, 'delay_ms': delay_s*1000, 'queue_delay_ms':queue_delay_s*1000, 'prior_delay_ms': prior_delay_ms})
                     #print(f'udl {udl} -- {network.get_udl_path_delay(udl, current_time)*1000} ms delay at time {t}')
             all_records += overlay_records
             history[tstep]['ovls'] = overlay_records

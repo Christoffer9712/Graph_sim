@@ -24,10 +24,8 @@ out of the returned dict if the model cannot predict it.
 Write the function, then add it to the `models` dict in main().
 """
 import math
-
 import numpy as np
 import torch
-import networkx as nx
 import matplotlib.pyplot as plt
 from astropy.time import Time
 from torch_geometric.data import Data
@@ -35,13 +33,14 @@ from torch_geometric.data import Data
 from algorithm.predictor.path_encoder import HeteroGATv2Encoder
 from algorithm.predictor.encoder_util import GraphEncoder
 from algorithm.predictor.f_topo import f_topo
+from algorithm.predictor.f_cov import f_cov
 from generate_data import generate_data     # <-- adjust to where your generate_data() lives
-from net_simulation.routing import get_path_distance_delay
 
 # Must be the same values as in train.py, otherwise the saved weights don't fit
 ENCODER_SETTINGS = dict(node_in=10, virtual_in=1, hidden_dim=128, out_dim=64,
                         heads=2, n_layers=3, dropout=0.1)
 FTOPO_SETTINGS = dict(in_dim=64, hidden_dim=64, dropout=0.0)
+FCOV_SETTINGS = dict(in_dim=64, dropout=0.0)
 
 
 # =============================================================================
@@ -68,6 +67,30 @@ def load_topo_model(model_path, device="cpu"):
         "device": device,
     }
 
+def load_topo_cov_model(model_path, device="cpu"):
+    """Rebuild encoder + f_topo and load the trained weights."""
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+
+    encoder = HeteroGATv2Encoder(**ENCODER_SETTINGS).to(device)
+    encoder.load_state_dict(checkpoint["encoder_state"])
+    encoder.eval()
+
+    ftopo = f_topo(**FTOPO_SETTINGS).to(device)
+    ftopo.load_state_dict(checkpoint["ftopo_state"])
+    ftopo.eval()
+
+    fcov = f_cov(**FCOV_SETTINGS).to(device)
+    fcov.load_state_dict(checkpoint["fcov_state"])
+    fcov.eval()
+    
+    return {
+        "graph_encoder": GraphEncoder(encoder),
+        "ftopo": ftopo,
+        "fcov": fcov,
+        "mean_delay": float(np.sum(checkpoint["mean_delay"])),   # same normalisation as in training
+        "std_delay": float(checkpoint["std_dev_delay"]),
+        "device": device,
+    }
 
 # =============================================================================
 # 2. Simulating test data
@@ -105,6 +128,99 @@ def make_topo_predictor(topo_model):
         return predictions
     return predict
 
+def make_topo_cov_predictor(model, Delta=3, M=1, use_own_measurements=True, use_only_own_measurements=False):
+    """Topology + covariance model, the same computation as train.py with INCLUDE_MEAS=True:
+
+        prediction = f_topo(enc) + g^T C^-1 (meas - f_topo)      (in normalised units)
+
+    using the measurements of all overlays in the `Delta` steps that end M steps
+    before `step` (training: history t, t-1, ..., t-Delta+1 -> target t+M).
+    Delta and M must be the values used in training.
+    use_own_measurements=False drops the overlay's own past measurements
+    (like REMOVE_SELF_MEAS in train.py).
+    """
+    device = model["device"]
+    graph_encoder, ftopo, fcov = model["graph_encoder"], model["ftopo"], model["fcov"]
+    mean, std = model["mean_delay"], model["std_delay"]
+
+    # Integer keys for fcov, built exactly as in train.py (only equality between keys matters)
+    name_vocab, id_vocab = {}, {}
+    def ovl_keys(ovl):
+        wps = [name_vocab.setdefault(nm, len(name_vocab)) for nm in ovl['ovl_path']][:fcov.n_wp]
+        wps += [-1] * (fcov.n_wp - len(wps))
+        return torch.tensor([id_vocab.setdefault(ovl['ovl_id'], len(id_vocab))] + wps,
+                            dtype=torch.long, device=device)
+
+    # Encodings never change (model in eval mode), so each (step, overlay) is encoded once
+    cache = {"history": None, "steps": {}}
+    def encode_step(history, s, ovls):
+        """{ovl_id: (encoding, normalised f_topo output)} for the given overlays at step s."""
+        if cache["history"] is not history:              # new simulation -> empty the cache
+            cache["history"], cache["steps"] = history, {}
+        step_cache = cache["steps"].setdefault(s, {})
+        missing = [o for o in ovls if o["ovl_id"] not in step_cache]
+        if missing:
+            data = snapshot_to_data(history[s], device)
+            encodings = graph_encoder.encode_overlays_pyg_batched(data, missing)
+            for o in missing:
+                enc = encodings[o["ovl_id"]]
+                step_cache[o["ovl_id"]] = (enc, ftopo(enc))
+        return step_cache
+
+    def predict(history, step, ovls):
+        with torch.no_grad():
+            # 1. Past measurements of all overlays (the "history" in train.py)
+            H_hist, z_hist, elapsed, keys_hist, ids_hist = [], [], [], [], []
+            for i in range(Delta):
+                s = step - M - i
+                if s not in history:
+                    continue
+                past_ovls = history[s]["ovls"]
+                encoded = encode_step(history, s, past_ovls)
+                for o in past_ovls:
+                    enc, out_topo = encoded[o["ovl_id"]]
+                    meas = (o["delay_ms"] - mean) / (std + 1e-8)
+                    H_hist.append(enc)
+                    z_hist.append(meas - out_topo[0])          # measured minus topology part
+                    elapsed.append(float(i))
+                    keys_hist.append(ovl_keys(o))
+                    ids_hist.append(o["ovl_id"])
+
+            if H_hist:
+                H_hist = torch.stack(H_hist)
+                z_hist = torch.stack(z_hist)
+                lag = torch.tensor(elapsed, device=device).unsqueeze(1) + M
+                keys_hist = torch.stack(keys_hist)
+
+            # 2. Prediction for every overlay at `step`
+            current = encode_step(history, step, ovls)
+            predictions = {}
+            for ovl in ovls:
+                enc, out_topo = current[ovl["ovl_id"]]
+                normalised = out_topo[0]
+
+                if len(H_hist) > 0:
+                    if use_only_own_measurements:
+                        use = torch.tensor([hid == ovl["ovl_id"] for hid in ids_hist],
+                                       dtype=torch.bool, device=device)
+                    else:
+                        use = torch.tensor([use_own_measurements or hid != ovl["ovl_id"] for hid in ids_hist],
+                                       dtype=torch.bool, device=device)
+                    n = int(use.sum())
+                    if n > 0:
+                        C = fcov(H_hist[use], lag[use], keys_hist=keys_hist[use],
+                                 include_phi=False, add_noise=False).reshape(n, n)
+                        g = fcov(H_hist[use], lag[use], h_pred=enc, keys_hist=keys_hist[use],
+                                 keys_pred=ovl_keys(ovl), include_phi=False, add_noise=False).reshape(n, 1)
+                        #C = fcov(H_hist[use], lag[use], include_phi=True, add_noise=False).reshape(n, n)
+                        #g = fcov(H_hist[use], lag[use], h_pred=enc, include_phi=True, add_noise=False).reshape(n, 1)
+                        R = 0.001*torch.eye(C.shape[0], dtype=C.dtype, device=C.device)
+                        correction = g.T @ torch.linalg.solve(C+R, z_hist[use])
+                        normalised = normalised + correction[0]
+
+                predictions[ovl["ovl_id"]] = float(normalised) * std + mean
+        return predictions
+    return predict
 
 def make_mean_predictor(mean_delay_ms):
     """Baseline: always predict the average delay seen in training."""
@@ -232,15 +348,17 @@ def main():
     seed = 1234                                              # a seed not used for training
     dt = 8.0                                                 # TIME_STEP used in the simulation
 
-    topo_model = load_topo_model(model_path)
+    topo_model = load_topo_cov_model(model_path)
     history = simulate_test_data(test_data_path, start_time, seed)
 
-    # Add new models here: name -> predict(history, step, ovls)
     models = {
         "topo (GAT)": make_topo_predictor(topo_model),
+        "topo + cov": make_topo_cov_predictor(topo_model),
+        "topo + cov (no own)": make_topo_cov_predictor(topo_model, use_own_measurements=False),
+        "topo + cov (only own)": make_topo_cov_predictor(topo_model, use_only_own_measurements=True),
         "train mean": make_mean_predictor(topo_model["mean_delay"]),
         "persistence": persistence_predictor,
-        "oracle prior": analytic_prior_predictor
+        "oracle prior": analytic_prior_predictor,
     }
 
     rows = run_models(history, models)
@@ -248,7 +366,6 @@ def main():
     plot_over_time(rows, list(models), dt)
     plot_predicted_vs_true(rows, list(models))
     plt.show()
-
 
 if __name__ == "__main__":
     main()
